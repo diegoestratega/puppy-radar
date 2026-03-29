@@ -6,14 +6,13 @@ import re
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from playwright.sync_api import sync_playwright
 from pydantic import BaseModel
@@ -52,15 +51,20 @@ FP_BASE            = "https://954puppies.com"
 _fp_url_cache: dict = {"urls": [], "cached_at": 0.0}
 FP_CACHE_TTL        = 1800  # 30 minutes
 
-_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+# Render free tier: 1 worker + --single-process keeps Chromium inside 512MB RAM
+PLAYWRIGHT_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--single-process",
+    "--disable-setuid-sandbox",
+    "--no-zygote",
+]
+
+_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 RG_ALLOWED_AGE_GROUPS  = {"baby", "young"}
 RG_ALLOWED_SIZE_GROUPS = {"small"}
-
-RG_UNAVAILABLE_STATUSES = {
-    "adopted", "hold", "on hold", "not available",
-    "inactive", "deleted", "transfer", "euthanized",
-}
 
 RG_LOW_SHED_KEYWORDS = {
     "poodle", "maltese", "bichon", "yorkshire", "yorkie", "havanese",
@@ -84,82 +88,6 @@ MDAS_URLS = [
     "https://www.miamidade.gov/animals/",
     "https://adopt.miamidade.gov/",
 ]
-
-_FP_SOLD_RE = re.compile(
-    r"(?:"
-    r"(?:has been|is now|is)\s+(?:adopted|sold|reserved)|"
-    r"status[\s:>\"\\-]{0,6}(?:adopted|sold|reserved)|"
-    r"(?:this puppy|this dog)[^.]{0,60}(?:adopted|sold|reserved|gone)|"
-    r"no longer available|"
-    r"gone to (?:a |their |his |her )?(?:new |forever )?home|"
-    r"found (?:a |their |his |her )?forever home|"
-    r'"availability"\s*:\s*"(?!InStock)'
-    r")",
-    re.I | re.DOTALL,
-)
-
-_FP_HREF_JS = """
-() => {
-    const SOLD = /\\b(adopted|sold|reserved)\\b/i;
-    return [...new Set(
-        Array.from(document.querySelectorAll('a[href]'))
-            .filter(a => {
-                const card = a.closest(
-                    'article,[class*="card"],[class*="item"],li,[class*="puppy"]'
-                ) || a.parentElement;
-                return card ? !SOLD.test(card.textContent) : true;
-            })
-            .map(a => a.href)
-    )];
-}
-"""
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TTLCache — simple in-memory cache with per-key TTL
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TTLCache:
-    """
-    Thread-safe-enough (GIL-protected) in-memory cache.
-    Each key stores (value, expires_at).
-    """
-    def __init__(self, default_ttl: float):
-        self.default_ttl = default_ttl
-        self._store: dict[str, tuple[Any, float]] = {}
-
-    def get(self, key: str) -> Any | None:
-        entry = self._store.get(key)
-        if entry and time.time() < entry[1]:
-            return entry[0]
-        return None
-
-    def set(self, key: str, value: Any, ttl: float | None = None):
-        self._store[key] = (value, time.time() + (ttl or self.default_ttl))
-
-    def clear(self, key: str | None = None):
-        if key:
-            self._store.pop(key, None)
-        else:
-            self._store.clear()
-
-    def ttl_remaining(self, key: str) -> float:
-        entry = self._store.get(key)
-        if not entry:
-            return 0.0
-        return max(0.0, entry[1] - time.time())
-
-    def has(self, key: str) -> bool:
-        return self.get(key) is not None
-
-
-# ── Per-source result caches ──────────────────────────────────────────────
-# RescueGroups: cache ALL animals (breed filter applied in Python = no extra calls)
-_rg_raw_cache   = TTLCache(300)    # 5 min  — key: "all"
-# 954 Puppies:  cache each detail page individually
-_fp_page_cache  = TTLCache(1800)   # 30 min — key: puppy URL
-# Miami-Dade:   cache raw results
-_mdas_raw_cache = TTLCache(600)    # 10 min — key: "all"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -212,7 +140,7 @@ def matches_breed(name: str, primary: str, secondary: str, filt: str) -> bool:
 def _make_absolute(url: str, base: str) -> str:
     if not url or url.startswith("http"):
         return url or ""
-    p    = urlparse(base)
+    p = urlparse(base)
     root = f"{p.scheme}://{p.netloc}"
     return root + url if url.startswith("/") else f"{root}/{url.lstrip('/')}"
 
@@ -267,41 +195,16 @@ def _is_valid_fp_url(url: str) -> bool:
     return bool(re.match(r"^\d{5,}$", segs[2]))
 
 
-def _fp_is_sold(soup: BeautifulSoup, page_text: str) -> bool:
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            ld    = json.loads(script.string or "")
-            avail = (ld.get("offers") or {}).get("availability", "")
-            if avail and "InStock" not in avail:
-                return True
-        except Exception:
-            pass
-    og = soup.find("meta", property="og:title")
-    if og and re.search(r"\b(adopted|sold|reserved)\b", og.get("content", ""), re.I):
-        return True
-    title_el = soup.find("title")
-    if title_el and re.search(r"\b(adopted|sold|reserved)\b", title_el.get_text(), re.I):
-        return True
-    for el in soup.find_all(class_=re.compile(r"status|badge|chip|tag|label|pill|ribbon", re.I)):
-        if re.match(r"^(adopted|sold|reserved|unavailable|gone)$",
-                    el.get_text(strip=True).lower()):
-            return True
-    if _FP_SOLD_RE.search(page_text):
-        return True
-    return False
+# ── RescueGroups ──────────────────────────────────────────────────────────
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# RescueGroups — raw cache (breed-agnostic)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _rg_photo_map(animals: list, included: list) -> dict[str, str]:
+def _rg_photo_map(animals: list, included: list) -> dict:
     idx: dict[str, str] = {}
     for inc in included:
         if inc.get("type") == "pictures":
             u = photo_str(inc.get("attributes", {}))
             if u:
                 idx[str(inc.get("id", ""))] = u
+
     m: dict[str, str] = {}
     for a in animals:
         aid  = str(a.get("id", ""))
@@ -314,26 +217,38 @@ def _rg_photo_map(animals: list, included: list) -> dict[str, str]:
         if aid not in m:
             thumb = a.get("attributes", {}).get("pictureThumbnailUrl")
             if thumb:
-                url_str = photo_str(thumb)
-                if url_str:
-                    m[aid] = url_str
+                m[aid] = photo_str(thumb)
     return m
 
 
-def _rg_passes_base(a: dict) -> bool:
-    """Pre-breed-filter checks (age, size, shed, status)."""
+def _rg_passes(a: dict, bf: str) -> bool:
     attrs  = a.get("attributes", {})
-    if (attrs.get("ageGroup")  or "").lower() not in RG_ALLOWED_AGE_GROUPS:  return False
-    if (attrs.get("sizeGroup") or "").lower() not in RG_ALLOWED_SIZE_GROUPS: return False
-    if (attrs.get("statusName") or "").lower().strip() in RG_UNAVAILABLE_STATUSES: return False
+    age_g  = (attrs.get("ageGroup")  or "").lower()
+    size_g = (attrs.get("sizeGroup") or "").lower()
+
+    if age_g  not in RG_ALLOWED_AGE_GROUPS:  return False
+    if size_g not in RG_ALLOWED_SIZE_GROUPS: return False
+
     age_s = (attrs.get("ageString") or "").lower()
-    if _rg_has_years(age_s): return False
+    if _rg_has_years(age_s):
+        return False
     mo = re.search(r"(\d+)\s*m(?:onth|o)s?", age_s, re.I)
-    if mo and int(mo.group(1)) >= 6: return False
+    if mo and int(mo.group(1)) >= 6:
+        return False
+
     breed = " ".join(filter(None, [
-        attrs.get("breedPrimary") or "", attrs.get("breedSecondary") or ""
+        attrs.get("breedPrimary") or "",
+        attrs.get("breedSecondary") or "",
     ])).lower()
-    return _is_low_shed(breed)
+    if not _is_low_shed(breed):
+        return False
+
+    return matches_breed(
+        attrs.get("name", ""),
+        attrs.get("breedPrimary", ""),
+        attrs.get("breedSecondary", ""),
+        bf,
+    )
 
 
 async def _rg_page(client: httpx.AsyncClient, page: int) -> dict:
@@ -345,7 +260,7 @@ async def _rg_page(client: httpx.AsyncClient, page: int) -> dict:
             "fields[animals]": (
                 "name,breedPrimary,breedSecondary,ageGroup,ageString,"
                 "sizeGroup,sex,locationCity,locationState,locationDistance,"
-                "updatedDate,urlSingleAdbk,pictureThumbnailUrl,statusName"
+                "updatedDate,urlSingleAdbk,pictureThumbnailUrl"
             ),
             "filters[postalcode]": ZIP_CODE,
             "filters[distance]":   RADIUS_MILES,
@@ -355,15 +270,9 @@ async def _rg_page(client: httpx.AsyncClient, page: int) -> dict:
     return r.json()
 
 
-async def _fetch_rg_all() -> list:
-    """
-    Fetch ALL passing RescueGroups animals (no breed filter).
-    Result cached for 5 minutes — one API burst per cache cycle.
-    """
-    cached = _rg_raw_cache.get("all")
-    if cached is not None:
-        return cached
-
+async def fetch_rescuegroups(bf: str) -> list:
+    if not RG_KEY:
+        return []
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             pages = await asyncio.gather(
@@ -377,13 +286,13 @@ async def _fetch_rg_all() -> list:
     for pg in pages:
         if isinstance(pg, Exception):
             continue
-        all_a.extend(pg.get("data",     []))
+        all_a.extend(pg.get("data", []))
         all_i.extend(pg.get("included", []))
 
     pm  = _rg_photo_map(all_a, all_i)
     out = []
     for a in all_a:
-        if not _rg_passes_base(a):
+        if not _rg_passes(a, bf):
             continue
         at  = a.get("attributes", {})
         lid = str(a.get("id", ""))
@@ -398,43 +307,22 @@ async def _fetch_rg_all() -> list:
             "distance_miles":  at.get("locationDistance"),
             "city":            at.get("locationCity", ""),
             "state":           at.get("locationState", ""),
-            "photo_url":       photo_str(pm.get(lid, "")),
+            "photo_url":       pm.get(lid, ""),
             "source":          "RescueGroups",
-            "source_type":     "rescue",
-            "price":           "",
             "posted_at":       at.get("updatedDate", ""),
-            "url":             at.get("urlSingleAdbk") or "",
+            "url":             at.get("urlSingleAdbk", ""),
             "low_shed":        True,
         })
-
-    _rg_raw_cache.set("all", out)
     return out
 
 
-async def fetch_rescuegroups(bf: str) -> list:
-    if not RG_KEY:
-        return []
-    all_animals = await _fetch_rg_all()
-    if not bf or bf.lower() == "all":
-        return all_animals
-    return [
-        a for a in all_animals
-        if matches_breed(a["name"], a["breed"], a["breed_secondary"], bf)
-    ]
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 954 Puppies — per-page detail cache
-# ═══════════════════════════════════════════════════════════════════════════
+# ── 954 Puppies — sync_playwright in thread pool ──────────────────────────
 
 def _fp_sync_scrape_all_breeds() -> list[str]:
     all_urls: set[str] = set()
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-            )
+            browser = pw.chromium.launch(headless=True, args=PLAYWRIGHT_ARGS)
             for slug in FP_BREED_SLUGS:
                 page = browser.new_page(user_agent=SCRAPER_HEADERS["User-Agent"])
                 try:
@@ -451,7 +339,10 @@ def _fp_sync_scrape_all_breeds() -> list[str]:
                         )
                     except Exception:
                         pass
-                    hrefs: list[str] = page.evaluate(_FP_HREF_JS)
+                    hrefs: list[str] = page.eval_on_selector_all(
+                        "a[href]",
+                        "els => [...new Set(els.map(el => el.href))]",
+                    )
                     for u in hrefs:
                         if _is_valid_fp_url(u):
                             all_urls.add(u)
@@ -468,11 +359,8 @@ def _fp_sync_scrape_all_breeds() -> list[str]:
 def _fp_sync_scrape_one_breed(breed_slug: str) -> list[str]:
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            page = browser.new_page(user_agent=SCRAPER_HEADERS["User-Agent"])
+            browser = pw.chromium.launch(headless=True, args=PLAYWRIGHT_ARGS)
+            page    = browser.new_page(user_agent=SCRAPER_HEADERS["User-Agent"])
             page.goto(
                 f"{FP_BASE}/puppies-for-sale/{breed_slug}",
                 wait_until="domcontentloaded",
@@ -486,7 +374,9 @@ def _fp_sync_scrape_one_breed(breed_slug: str) -> list[str]:
                 )
             except Exception:
                 pass
-            hrefs: list[str] = page.evaluate(_FP_HREF_JS)
+            hrefs = page.eval_on_selector_all(
+                "a[href]", "els => [...new Set(els.map(el => el.href))]"
+            )
             browser.close()
             return [u for u in hrefs if _is_valid_fp_url(u)]
     except Exception:
@@ -513,36 +403,23 @@ async def _on_startup():
 
 
 async def _fp_parse_detail(
-    client: httpx.AsyncClient, url: str
+    client: httpx.AsyncClient, url: str, bf: str
 ) -> dict | None:
-    """
-    Fetch and parse one 954puppies detail page.
-    Result (including None for invalid/sold) is cached for 30 minutes.
-    """
-    cached = _fp_page_cache.get(url)
-    if cached is not None:
-        return cached  # may be the sentinel False (sold/invalid)
-
     try:
         r = await client.get(url, timeout=12.0)
         if r.status_code != 200 or not re.search(r"\$[\d,]+", r.text):
-            _fp_page_cache.set(url, False)
             return None
         html = r.text
     except Exception:
-        return None  # network errors: don't cache so we retry next time
+        return None
 
     soup = BeautifulSoup(html, "html.parser")
     txt  = soup.get_text(" ", strip=True)
 
-    if _fp_is_sold(soup, txt):
-        _fp_page_cache.set(url, False)
-        return None
-
     name = ""
     og   = soup.find("meta", property="og:title")
     if og:
-        cand = re.split(r"\s*[-–|·]\s*", og.get("content", ""))[0].strip()
+        cand = re.split(r"\s*[-–|]\s*", og.get("content", ""))[0].strip()
         if 1 < len(cand) <= 25:
             name = cand
     if not name:
@@ -552,14 +429,16 @@ async def _fp_parse_detail(
             if 1 < len(cand) <= 25 and "puppies" not in cand.lower():
                 name = cand
     if not name or len(name) < 2:
-        _fp_page_cache.set(url, False)
         return None
 
     segs       = urlparse(url).path.lower().strip("/").split("/")
     breed_slug = segs[1] if len(segs) >= 2 else ""
     breed_name = breed_slug.replace("-", " ").title()
 
-    photo  = ""
+    if not matches_breed(name, breed_name, "", bf):
+        return None
+
+    photo = ""
     og_img = soup.find("meta", property="og:image")
     if og_img:
         photo = og_img.get("content", "")
@@ -576,7 +455,7 @@ async def _fp_parse_detail(
     price = pm.group(0) if pm else ""
     uid   = re.sub(r"[^a-z0-9]", "_", urlparse(url).path.lower())[-40:]
 
-    result = {
+    return {
         "id":              f"fp_{uid}",
         "name":            name,
         "breed":           breed_name,
@@ -589,21 +468,14 @@ async def _fp_parse_detail(
         "state":           "FL",
         "photo_url":       photo,
         "source":          "954 Puppies",
-        "source_type":     "store",
-        "price":           price,
         "posted_at":       "",
         "url":             url,
+        "price":           price,
         "low_shed":        True,
     }
-    _fp_page_cache.set(url, result)
-    return result
 
 
-async def _fetch_fp_all() -> list:
-    """
-    Return all valid 954 puppies (no breed filter).
-    Detail pages are individually cached — repeat calls are instant.
-    """
+async def fetch_954_puppies(bf: str) -> list:
     urls = await _fp_get_all_urls()
     if not urls:
         return []
@@ -613,7 +485,7 @@ async def _fetch_fp_all() -> list:
         results = []
         for i in range(0, min(len(urls), 100), 8):
             for r in await asyncio.gather(
-                *[_fp_parse_detail(client, u) for u in urls[i:i+8]],
+                *[_fp_parse_detail(client, u, bf) for u in urls[i:i+8]],
                 return_exceptions=True,
             ):
                 if isinstance(r, dict) and r:
@@ -621,21 +493,9 @@ async def _fetch_fp_all() -> list:
         return results
 
 
-async def fetch_954_puppies(bf: str) -> list:
-    all_puppies = await _fetch_fp_all()
-    if not bf or bf.lower() == "all":
-        return all_puppies
-    return [
-        p for p in all_puppies
-        if matches_breed(p["name"], p["breed"], p["breed_secondary"], bf)
-    ]
+# ── Miami-Dade ────────────────────────────────────────────────────────────
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Miami-Dade — raw cache
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _parse_mdas(html: str, base: str) -> list:
+def _parse_mdas(html: str, base: str, bf: str) -> list:
     soup = BeautifulSoup(html, "html.parser")
     out, seen = [], set()
     cards = (
@@ -660,10 +520,10 @@ def _parse_mdas(html: str, base: str) -> list:
             continue
         if not _is_low_shed(f"{name} {breed}"):
             continue
+        if not matches_breed(name, breed, "", bf):
+            continue
         img = card.find("img")
-        ph  = _make_absolute(
-            photo_str(img.get("src") or img.get("data-src") or ""), base
-        ) if img else ""
+        ph  = _make_absolute(photo_str(img.get("src") or img.get("data-src") or ""), base) if img else ""
         lk  = card.find("a", href=True)
         out.append({
             "id":              f"mdas_{re.sub(r'[^a-z0-9]', '_', name.lower())}",
@@ -678,8 +538,6 @@ def _parse_mdas(html: str, base: str) -> list:
             "state":           "FL",
             "photo_url":       ph,
             "source":          "Miami-Dade Animal Services",
-            "source_type":     "rescue",
-            "price":           "",
             "posted_at":       "",
             "url":             _make_absolute(lk["href"], base) if lk else base,
             "low_shed":        True,
@@ -687,10 +545,7 @@ def _parse_mdas(html: str, base: str) -> list:
     return out[:50]
 
 
-async def _fetch_mdas_all() -> list:
-    cached = _mdas_raw_cache.get("all")
-    if cached is not None:
-        return cached
+async def fetch_miami_dade(bf: str) -> list:
     async with httpx.AsyncClient(
         timeout=25.0, follow_redirects=True, headers=SCRAPER_HEADERS
     ) as client:
@@ -698,29 +553,15 @@ async def _fetch_mdas_all() -> list:
             try:
                 r = await client.get(url)
                 if r.status_code == 200 and len(r.text) > 500:
-                    res = _parse_mdas(r.text, str(r.url))
+                    res = _parse_mdas(r.text, str(r.url), bf)
                     if res:
-                        _mdas_raw_cache.set("all", res)
                         return res
             except Exception:
                 continue
-    _mdas_raw_cache.set("all", [])
     return []
 
 
-async def fetch_miami_dade(bf: str) -> list:
-    all_mdas = await _fetch_mdas_all()
-    if not bf or bf.lower() == "all":
-        return all_mdas
-    return [
-        m for m in all_mdas
-        if matches_breed(m["name"], m["breed"], m["breed_secondary"], bf)
-    ]
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Models & routes
-# ═══════════════════════════════════════════════════════════════════════════
+# ── Models & Routes ───────────────────────────────────────────────────────
 
 class StateUpdate(BaseModel):
     listing_id: str
@@ -733,46 +574,6 @@ def get_breeds():
     return {"breeds": BREEDS}
 
 
-@app.get("/api/cache-status")
-def cache_status():
-    """Show TTL remaining and entry counts for all caches."""
-    fp_pages_cached = sum(
-        1 for k, (v, exp) in _fp_page_cache._store.items()
-        if v is not False and time.time() < exp
-    )
-    return {
-        "rescuegroups": {
-            "cached":        _rg_raw_cache.has("all"),
-            "ttl_remaining": round(_rg_raw_cache.ttl_remaining("all")),
-            "entries":       len(_rg_raw_cache.get("all") or []),
-        },
-        "954_puppies_urls": {
-            "cached":        bool(_fp_url_cache["urls"]),
-            "ttl_remaining": round(max(0.0, FP_CACHE_TTL - (time.time() - _fp_url_cache["cached_at"]))),
-            "entries":       len(_fp_url_cache["urls"]),
-        },
-        "954_puppies_pages": {
-            "cached_pages":  fp_pages_cached,
-            "ttl_remaining": "per-page (30 min each)",
-        },
-        "miami_dade": {
-            "cached":        _mdas_raw_cache.has("all"),
-            "ttl_remaining": round(_mdas_raw_cache.ttl_remaining("all")),
-            "entries":       len(_mdas_raw_cache.get("all") or []),
-        },
-    }
-
-
-@app.post("/api/cache-clear")
-def cache_clear():
-    """Bust all result caches (called by the Refresh button)."""
-    _rg_raw_cache.clear()
-    _mdas_raw_cache.clear()
-    # Don't clear fp_page_cache or fp_url_cache — those are expensive to rebuild
-    # and puppy listings don't change that fast
-    return {"ok": True, "cleared": ["rescuegroups", "miami_dade"]}
-
-
 @app.get("/api/debug")
 async def debug_api():
     cache_age = round(time.time() - _fp_url_cache["cached_at"])
@@ -780,11 +581,11 @@ async def debug_api():
         "rescuegroups_key": bool(RG_KEY),
         "fp_breed_count":   len(FP_BREED_SLUGS),
         "fp_cached_urls":   len(_fp_url_cache["urls"]),
-        "fp_cache_age_sec": cache_age if cache_age < 1_000_000 else "not populated",
-        "playwright_mode":  "sync_playwright in ThreadPoolExecutor (Windows-safe)",
-        "cache_status":     cache_status(),
+        "fp_cache_age_sec": cache_age if cache_age < 1_000_000 else "cache not yet populated",
+        "playwright_mode":  "sync_playwright in ThreadPoolExecutor — Render safe",
         "sources":          {},
     }
+
     if RG_KEY:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -794,14 +595,16 @@ async def debug_api():
             for a in animals:
                 ag = a.get("attributes", {}).get("ageGroup", "Unknown")
                 age_c[ag] = age_c.get(ag, 0) + 1
+            passing = [a for a in animals if _rg_passes(a, "All")]
             result["sources"]["rescuegroups"] = {
-                "status":        "ok",
-                "total_page1":   len(animals),
-                "passing_base":  sum(1 for a in animals if _rg_passes_base(a)),
-                "age_breakdown": age_c,
+                "status":               "ok",
+                "total_page1":          len(animals),
+                "passing_all_filters":  len(passing),
+                "age_breakdown":        age_c,
             }
         except Exception as e:
             result["sources"]["rescuegroups"] = {"status": "error", "detail": str(e)}
+
     try:
         loop      = asyncio.get_event_loop()
         test_urls = await loop.run_in_executor(
@@ -813,14 +616,21 @@ async def debug_api():
             "test_urls_found": len(test_urls),
             "sample_urls":     test_urls[:4],
             "cached_urls":     len(_fp_url_cache["urls"]),
+            "tip":             "If test_urls_found > 0 — hit /api/fp-refresh to fill all breeds.",
         }
     except Exception as e:
         result["sources"]["954_puppies"] = {"status": "error", "detail": str(e)}
+
     try:
-        mdas = await _fetch_mdas_all()
-        result["sources"]["miami_dade"] = {"status": "ok", "listings_found": len(mdas)}
+        mdas = await fetch_miami_dade("All")
+        result["sources"]["miami_dade"] = {
+            "status":         "ok",
+            "listings_found": len(mdas),
+            "sample":         [r["name"] for r in mdas[:5]],
+        }
     except Exception as e:
         result["sources"]["miami_dade"] = {"status": "error", "detail": str(e)}
+
     return result
 
 
@@ -830,30 +640,27 @@ async def fp_refresh():
     cached_until = datetime.utcfromtimestamp(
         _fp_url_cache["cached_at"] + FP_CACHE_TTL
     ).strftime("%Y-%m-%d %H:%M UTC")
-    return {"status": "ok", "urls_found": len(urls), "cached_until": cached_until, "sample": urls[:5]}
+    return {
+        "status":       "ok",
+        "urls_found":   len(urls),
+        "cached_until": cached_until,
+        "sample":       urls[:5],
+    }
 
 
 @app.get("/api/search")
-async def search_puppies(
-    breed:  str = Query(default="All"),
-    sort:   str = Query(default="newest"),
-    source: str = Query(default="all"),
-):
+async def search_puppies(breed: str = "All", sort: str = "newest"):
     rg, mdas, fp = await asyncio.gather(
         fetch_rescuegroups(breed),
         fetch_miami_dade(breed),
         fetch_954_puppies(breed),
         return_exceptions=True,
     )
+
     all_results: list = []
     for r in [rg, mdas, fp]:
         if isinstance(r, list):
             all_results.extend(r)
-
-    if source == "store":
-        all_results = [x for x in all_results if x.get("source_type") == "store"]
-    elif source == "rescue":
-        all_results = [x for x in all_results if x.get("source_type") == "rescue"]
 
     seen, deduped = set(), []
     for item in all_results:
@@ -878,19 +685,7 @@ async def search_puppies(
         item["note"]   = s.get("note", "")
         results.append(item)
 
-    # Include cache metadata so the frontend knows how fresh the data is
-    return {
-        "results": results,
-        "total":   len(results),
-        "cache": {
-            "rg_ttl":   round(_rg_raw_cache.ttl_remaining("all")),
-            "mdas_ttl": round(_mdas_raw_cache.ttl_remaining("all")),
-            "fp_pages": sum(
-                1 for k, (v, exp) in _fp_page_cache._store.items()
-                if v is not False and time.time() < exp
-            ),
-        },
-    }
+    return {"results": results, "total": len(results)}
 
 
 @app.get("/api/state")
