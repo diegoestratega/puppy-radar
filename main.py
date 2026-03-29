@@ -46,7 +46,16 @@ FP_BREED_SLUGS = [
 FP_BREED_SLUGS_SET = set(FP_BREED_SLUGS)
 FP_BASE            = "https://954puppies.com"
 
-_fp_url_cache: dict = {"urls": [], "cached_at": 0.0}
+# Sitemap paths to try — Astro generates one of these
+FP_SITEMAP_PATHS = [
+    "/sitemap.xml",
+    "/sitemap-index.xml",
+    "/sitemap_index.xml",
+    "/pages-sitemap.xml",
+    "/sitemap/sitemap-index.xml",
+]
+
+_fp_url_cache: dict = {"urls": [], "cached_at": 0.0, "method": ""}
 FP_CACHE_TTL        = 1800  # 30 minutes
 
 RG_ALLOWED_AGE_GROUPS  = {"baby", "young"}
@@ -175,14 +184,31 @@ def _rg_has_years(s: str) -> bool:
 
 
 def _is_valid_fp_url(url: str) -> bool:
-    """Accept ONLY /puppies/{breed-slug}/{5+ digit id}"""
+    """Accept /puppies/{breed-slug}/{alphanumeric-id}"""
     path = urlparse(url).path.lower().rstrip("/")
     segs = [s for s in path.split("/") if s]
     if len(segs) != 3 or segs[0] != "puppies":
         return False
     if segs[1] not in FP_BREED_SLUGS_SET:
         return False
-    return bool(re.match(r"^\d{5,}$", segs[2]))
+    # Accept numeric IDs or short alphanumeric slugs (min 4 chars)
+    return bool(re.match(r'^[a-z0-9-]{4,}$', segs[2]))
+
+
+def _extract_fp_urls_from_text(text: str) -> set[str]:
+    """
+    Extract all 954puppies puppy URLs from any text (HTML, JSON, XML).
+    Catches /puppies/{breed}/{id} in any format.
+    """
+    found = set()
+    pattern = r'(?:https?://954puppies\.com)?(/puppies/([a-z0-9-]+)/([a-z0-9-]{4,}))'
+    for m in re.finditer(pattern, text, re.I):
+        full_path = m.group(1)
+        slug      = m.group(2).lower()
+        pid       = m.group(3).lower()
+        if slug in FP_BREED_SLUGS_SET and re.match(r'^[a-z0-9-]{4,}$', pid):
+            found.add(f"{FP_BASE}{full_path}")
+    return found
 
 
 # ── RescueGroups ──────────────────────────────────────────────────────────
@@ -306,79 +332,116 @@ async def fetch_rescuegroups(bf: str) -> list:
     return out
 
 
-# ── 954 Puppies — pure httpx, no browser needed ───────────────────────────
+# ── 954 Puppies — sitemap + httpx ─────────────────────────────────────────
 #
-# 954puppies.com runs on Astro which server-renders all HTML.
-# No JavaScript execution needed — plain httpx fetches return full DOM.
-# All 23 breed pages are fetched concurrently (semaphore=5 to be polite).
-# Total refresh time: ~10-15 seconds instead of 5+ minutes with Playwright.
+# Strategy (in order of preference):
+#   1. Sitemap XML  — single request, returns ALL puppy URLs at once (~1 sec)
+#   2. Listing HTML — fallback; extracts any embedded JSON/links from page source
+#
+# Why sitemap works: Astro generates /sitemap.xml listing every pre-rendered page.
+# Individual puppy pages are pre-rendered for SEO, so they appear in the sitemap.
+# Listing PAGES are NOT pre-rendered (they're client-side filtered), which is why
+# httpx returned 0 URLs from /puppies-for-sale/maltese.
 
-async def _fp_fetch_breed_urls(
-    client: httpx.AsyncClient, slug: str
-) -> list[str]:
+
+async def _fp_urls_from_sitemap(client: httpx.AsyncClient) -> tuple[list[str], str]:
     """
-    Fetch one breed listing page and extract all valid individual puppy URLs.
-    Works because Astro pre-renders the puppy card links server-side.
+    Fetch the sitemap, follow sub-sitemaps if needed, return all matching puppy URLs.
+    Returns (url_list, sitemap_url_that_worked) or ([], "").
     """
-    try:
-        r = await client.get(
-            f"{FP_BASE}/puppies-for-sale/{slug}",
-            timeout=15.0,
-        )
-        if r.status_code != 200:
-            return []
-
-        soup  = BeautifulSoup(r.text, "lxml")
-        found = set()
-
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            # Normalise to absolute URL
-            if href.startswith("/"):
-                href = f"{FP_BASE}{href}"
-            elif not href.startswith("http"):
+    for path in FP_SITEMAP_PATHS:
+        url = f"{FP_BASE}{path}"
+        try:
+            r = await client.get(url, timeout=15.0)
+            if r.status_code != 200:
                 continue
-            if _is_valid_fp_url(href):
-                found.add(href)
 
-        return list(found)
+            content = r.text
 
-    except Exception:
-        return []
+            # Check if sitemap index (contains links to other sitemaps)
+            sub_maps = re.findall(
+                r'<loc>\s*(https?://[^\s<]*sitemap[^\s<]*)\s*</loc>',
+                content, re.I
+            )
+
+            if sub_maps:
+                # Fetch all sub-sitemaps concurrently
+                responses = await asyncio.gather(
+                    *[client.get(sm, timeout=15.0) for sm in sub_maps[:30]],
+                    return_exceptions=True,
+                )
+                found: set[str] = set()
+                for resp in responses:
+                    if isinstance(resp, Exception):
+                        continue
+                    if hasattr(resp, "status_code") and resp.status_code == 200:
+                        found.update(_extract_fp_urls_from_text(resp.text))
+                if found:
+                    return list(found), url
+            else:
+                # Direct sitemap
+                found = _extract_fp_urls_from_text(content)
+                if found:
+                    return list(found), url
+
+        except Exception:
+            continue
+
+    return [], ""
+
+
+async def _fp_urls_from_listing_pages(client: httpx.AsyncClient) -> list[str]:
+    """
+    Fallback: fetch listing pages and extract any embedded puppy URLs from
+    the HTML source (including script tags with JSON data).
+    Works if Astro embeds hydration data server-side.
+    """
+    sem = asyncio.Semaphore(5)
+
+    async def fetch_one(slug: str) -> set[str]:
+        async with sem:
+            try:
+                r = await client.get(
+                    f"{FP_BASE}/puppies-for-sale/{slug}", timeout=15.0
+                )
+                if r.status_code != 200:
+                    return set()
+                return _extract_fp_urls_from_text(r.text)
+            except Exception:
+                return set()
+
+    results = await asyncio.gather(
+        *[fetch_one(slug) for slug in FP_BREED_SLUGS],
+        return_exceptions=True,
+    )
+
+    found: set[str] = set()
+    for r in results:
+        if isinstance(r, set):
+            found.update(r)
+    return list(found)
 
 
 async def _fp_refresh_cache() -> list[str]:
-    """Fetch all 23 breed listing pages concurrently and update the cache."""
     global _fp_url_cache
 
-    sem = asyncio.Semaphore(5)
-
-    async def guarded(client: httpx.AsyncClient, slug: str) -> list[str]:
-        async with sem:
-            return await _fp_fetch_breed_urls(client, slug)
-
     async with httpx.AsyncClient(
-        headers=SCRAPER_HEADERS,
-        follow_redirects=True,
-        timeout=20.0,
+        headers=SCRAPER_HEADERS, follow_redirects=True, timeout=20.0
     ) as client:
-        results = await asyncio.gather(
-            *[guarded(client, slug) for slug in FP_BREED_SLUGS],
-            return_exceptions=True,
-        )
+        # ── Strategy 1: Sitemap ──────────────────────────────────────────
+        urls, sitemap_used = await _fp_urls_from_sitemap(client)
+        method = f"sitemap:{sitemap_used}" if urls else ""
 
-    all_urls: set[str] = set()
-    for r in results:
-        if isinstance(r, list):
-            all_urls.update(r)
+        # ── Strategy 2: Listing page HTML (fallback) ─────────────────────
+        if not urls:
+            urls   = await _fp_urls_from_listing_pages(client)
+            method = "listing_pages_html" if urls else "none_found"
 
-    url_list = list(all_urls)
-    _fp_url_cache = {"urls": url_list, "cached_at": time.time()}
-    return url_list
+    _fp_url_cache = {"urls": urls, "cached_at": time.time(), "method": method}
+    return urls
 
 
 async def _fp_get_all_urls() -> list[str]:
-    """Return cached URLs or refresh if stale / empty."""
     if _fp_url_cache["urls"] and (time.time() - _fp_url_cache["cached_at"]) < FP_CACHE_TTL:
         return _fp_url_cache["urls"]
     return await _fp_refresh_cache()
@@ -386,40 +449,46 @@ async def _fp_get_all_urls() -> list[str]:
 
 @app.on_event("startup")
 async def _on_startup():
-    """Warm the 954 Puppies cache in the background — fast now with httpx."""
     asyncio.create_task(_fp_refresh_cache())
 
 
 async def _fp_parse_detail(
     client: httpx.AsyncClient, url: str, bf: str
 ) -> dict | None:
-    """
-    Fetch an individual puppy detail page (static Astro HTML).
-    Extract name, photo, age, sex, price.
-    """
     try:
         r = await client.get(url, timeout=12.0)
-        if r.status_code != 200 or not re.search(r"\$[\d,]+", r.text):
+        if r.status_code != 200:
             return None
         html = r.text
     except Exception:
         return None
 
+    # Skip pages with no price (not a real puppy listing)
+    if not re.search(r"\$[\d,]+", html):
+        return None
+
     soup = BeautifulSoup(html, "lxml")
     txt  = soup.get_text(" ", strip=True)
+
+    # Skip adopted/sold/unavailable puppies
+    body_lower = txt.lower()
+    if any(w in body_lower for w in (
+        "adopted", "this puppy has been", "no longer available", "sold",
+    )):
+        return None
 
     # Name from og:title: "Blu - French Bulldog Puppy | 954 Puppies"
     name = ""
     og   = soup.find("meta", property="og:title")
     if og:
         cand = re.split(r"\s*[-–|]\s*", og.get("content", ""))[0].strip()
-        if 1 < len(cand) <= 25:
+        if 1 < len(cand) <= 30:
             name = cand
     if not name:
         h1 = soup.find("h1")
         if h1:
             cand = h1.get_text(strip=True)
-            if 1 < len(cand) <= 25 and "puppies" not in cand.lower():
+            if 1 < len(cand) <= 30 and "puppies" not in cand.lower():
                 name = cand
     if not name or len(name) < 2:
         return None
@@ -429,11 +498,6 @@ async def _fp_parse_detail(
     breed_name = breed_slug.replace("-", " ").title()
 
     if not matches_breed(name, breed_name, "", bf):
-        return None
-
-    # Skip if page says "adopted" or "sold"
-    body_lower = txt.lower()
-    if any(w in body_lower for w in ("adopted", "this puppy has been", "no longer available")):
         return None
 
     photo = ""
@@ -482,7 +546,6 @@ async def fetch_954_puppies(bf: str) -> list:
         timeout=30.0, follow_redirects=True, headers=SCRAPER_HEADERS
     ) as client:
         results = []
-        # Process in batches of 10 concurrently
         for i in range(0, min(len(urls), 150), 10):
             batch = urls[i:i+10]
             for r in await asyncio.gather(
@@ -527,7 +590,7 @@ def _parse_mdas(html: str, base: str, bf: str) -> list:
         ph  = _make_absolute(
             (img.get("src") or img.get("data-src") or ""), base
         ) if img else ""
-        lk  = card.find("a", href=True)
+        lk = card.find("a", href=True)
         out.append({
             "id":              f"mdas_{re.sub(r'[^a-z0-9]', '_', name.lower())}",
             "name":            name,
@@ -584,8 +647,8 @@ async def debug_api():
         "rescuegroups_key": bool(RG_KEY),
         "fp_breed_count":   len(FP_BREED_SLUGS),
         "fp_cached_urls":   len(_fp_url_cache["urls"]),
+        "fp_cache_method":  _fp_url_cache.get("method", "none"),
         "fp_cache_age_sec": cache_age if cache_age < 1_000_000 else "cache not yet populated",
-        "scraping_mode":    "pure httpx — no browser, no Playwright",
         "sources":          {},
     }
 
@@ -609,23 +672,34 @@ async def debug_api():
         except Exception as e:
             result["sources"]["rescuegroups"] = {"status": "error", "detail": str(e)}
 
-    # 954 Puppies — test one breed page quickly
-    try:
-        async with httpx.AsyncClient(
-            headers=SCRAPER_HEADERS, follow_redirects=True, timeout=15.0
-        ) as client:
-            test_urls = await _fp_fetch_breed_urls(client, "maltese")
+    # 954 Puppies — test sitemap + one listing page
+    async with httpx.AsyncClient(headers=SCRAPER_HEADERS, follow_redirects=True, timeout=15.0) as client:
+        # Test sitemap
+        sitemap_urls, sitemap_found_at = await _fp_urls_from_sitemap(client)
 
-        result["sources"]["954_puppies"] = {
-            "status":          "ok",
-            "test_breed":      "maltese",
-            "test_urls_found": len(test_urls),
-            "sample_urls":     test_urls[:4],
-            "cached_urls":     len(_fp_url_cache["urls"]),
-            "note":            "httpx only — no browser. If test_urls_found=0, page may be JS-rendered.",
-        }
-    except Exception as e:
-        result["sources"]["954_puppies"] = {"status": "error", "detail": str(e)}
+        # Test one listing page
+        try:
+            r = await client.get(f"{FP_BASE}/puppies-for-sale/maltese", timeout=12.0)
+            listing_status  = r.status_code
+            listing_len     = len(r.text)
+            listing_urls    = list(_extract_fp_urls_from_text(r.text))
+            listing_snippet = r.text[:500].replace("\n", " ")
+        except Exception as e:
+            listing_status  = 0
+            listing_len     = 0
+            listing_urls    = []
+            listing_snippet = str(e)
+
+    result["sources"]["954_puppies"] = {
+        "sitemap_urls_found":   len(sitemap_urls),
+        "sitemap_found_at":     sitemap_found_at or "none worked",
+        "sitemap_sample":       sitemap_urls[:3],
+        "listing_http_status":  listing_status,
+        "listing_html_length":  listing_len,
+        "listing_urls_in_html": len(listing_urls),
+        "listing_html_snippet": listing_snippet,
+        "cached_urls":          len(_fp_url_cache["urls"]),
+    }
 
     # Miami-Dade
     try:
@@ -643,10 +717,6 @@ async def debug_api():
 
 @app.get("/api/fp-refresh")
 async def fp_refresh():
-    """
-    Refresh 954 Puppies URL cache using httpx.
-    Should complete in ~10-15 seconds (vs 5+ minutes with Playwright).
-    """
     t0   = time.time()
     urls = await _fp_refresh_cache()
     elapsed = round(time.time() - t0, 1)
@@ -654,11 +724,12 @@ async def fp_refresh():
         _fp_url_cache["cached_at"] + FP_CACHE_TTL
     ).strftime("%Y-%m-%d %H:%M UTC")
     return {
-        "status":         "ok",
-        "urls_found":     len(urls),
-        "elapsed_sec":    elapsed,
-        "cached_until":   cached_until,
-        "sample":         urls[:5],
+        "status":       "ok",
+        "urls_found":   len(urls),
+        "method_used":  _fp_url_cache.get("method", ""),
+        "elapsed_sec":  elapsed,
+        "cached_until": cached_until,
+        "sample":       urls[:5],
     }
 
 
