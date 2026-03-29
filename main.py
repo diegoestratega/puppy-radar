@@ -51,7 +51,7 @@ FP_BASE            = "https://954puppies.com"
 _fp_url_cache: dict = {"urls": [], "cached_at": 0.0}
 FP_CACHE_TTL        = 1800  # 30 minutes
 
-# Render free tier: 1 worker + --single-process keeps Chromium inside 512MB RAM
+# --single-process + --no-zygote = Chromium fits inside 512MB on Render free tier
 PLAYWRIGHT_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -61,6 +61,7 @@ PLAYWRIGHT_ARGS = [
     "--no-zygote",
 ]
 
+# max_workers=1 — only one Playwright thread at a time on free tier
 _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 RG_ALLOWED_AGE_GROUPS  = {"baby", "young"}
@@ -316,47 +317,14 @@ async def fetch_rescuegroups(bf: str) -> list:
     return out
 
 
-# ── 954 Puppies — sync_playwright in thread pool ──────────────────────────
-
-def _fp_sync_scrape_all_breeds() -> list[str]:
-    all_urls: set[str] = set()
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=PLAYWRIGHT_ARGS)
-            for slug in FP_BREED_SLUGS:
-                page = browser.new_page(user_agent=SCRAPER_HEADERS["User-Agent"])
-                try:
-                    page.goto(
-                        f"{FP_BASE}/puppies-for-sale/{slug}",
-                        wait_until="domcontentloaded",
-                        timeout=25_000,
-                    )
-                    page.wait_for_timeout(2_500)
-                    try:
-                        page.wait_for_function(
-                            f'document.querySelectorAll(\'a[href*="/puppies/{slug}/\"]\').length > 0',
-                            timeout=7_000,
-                        )
-                    except Exception:
-                        pass
-                    hrefs: list[str] = page.eval_on_selector_all(
-                        "a[href]",
-                        "els => [...new Set(els.map(el => el.href))]",
-                    )
-                    for u in hrefs:
-                        if _is_valid_fp_url(u):
-                            all_urls.add(u)
-                except Exception:
-                    pass
-                finally:
-                    page.close()
-            browser.close()
-    except Exception:
-        pass
-    return list(all_urls)
-
+# ── 954 Puppies — sync_playwright, one fresh browser per breed ────────────
+#
+# KEY FIX: Each breed gets its own isolated browser launch via
+# _fp_sync_scrape_one_breed(). The old shared-browser loop crashed after
+# the first breed (bichonpoo) because --single-process exhausted 512MB RAM.
 
 def _fp_sync_scrape_one_breed(breed_slug: str) -> list[str]:
+    """Fresh browser launch per breed — no RAM accumulation between breeds."""
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True, args=PLAYWRIGHT_ARGS)
@@ -364,7 +332,7 @@ def _fp_sync_scrape_one_breed(breed_slug: str) -> list[str]:
             page.goto(
                 f"{FP_BASE}/puppies-for-sale/{breed_slug}",
                 wait_until="domcontentloaded",
-                timeout=20_000,
+                timeout=25_000,
             )
             page.wait_for_timeout(2_500)
             try:
@@ -374,13 +342,30 @@ def _fp_sync_scrape_one_breed(breed_slug: str) -> list[str]:
                 )
             except Exception:
                 pass
-            hrefs = page.eval_on_selector_all(
-                "a[href]", "els => [...new Set(els.map(el => el.href))]"
+            hrefs: list[str] = page.eval_on_selector_all(
+                "a[href]",
+                "els => [...new Set(els.map(el => el.href))]",
             )
             browser.close()
             return [u for u in hrefs if _is_valid_fp_url(u)]
     except Exception:
         return []
+
+
+def _fp_sync_scrape_all_breeds() -> list[str]:
+    """
+    Loop through every breed, each with its own isolated browser session.
+    One browser crash no longer takes down the whole scrape.
+    """
+    all_urls: set[str] = set()
+    for slug in FP_BREED_SLUGS:
+        try:
+            urls = _fp_sync_scrape_one_breed(slug)
+            all_urls.update(urls)
+            time.sleep(0.3)  # small polite pause between launches
+        except Exception:
+            continue
+    return list(all_urls)
 
 
 async def _fp_refresh_cache() -> list[str]:
@@ -407,14 +392,22 @@ async def _fp_parse_detail(
 ) -> dict | None:
     try:
         r = await client.get(url, timeout=12.0)
-        if r.status_code != 200 or not re.search(r"\$[\d,]+", r.text):
+        if r.status_code != 200:
             return None
         html = r.text
     except Exception:
         return None
 
+    # Skip adopted/unavailable pages — no price means not for sale
+    if not re.search(r"\$[\d,]+", html):
+        return None
+
     soup = BeautifulSoup(html, "html.parser")
     txt  = soup.get_text(" ", strip=True)
+
+    # Skip if page explicitly says adopted or sold
+    if re.search(r"\b(adopted|sold|no longer available)\b", txt, re.I):
+        return None
 
     name = ""
     og   = soup.find("meta", property="og:title")
@@ -582,7 +575,7 @@ async def debug_api():
         "fp_breed_count":   len(FP_BREED_SLUGS),
         "fp_cached_urls":   len(_fp_url_cache["urls"]),
         "fp_cache_age_sec": cache_age if cache_age < 1_000_000 else "cache not yet populated",
-        "playwright_mode":  "sync_playwright in ThreadPoolExecutor — Render safe",
+        "playwright_mode":  "sync_playwright — isolated browser per breed (RAM-safe)",
         "sources":          {},
     }
 
@@ -597,10 +590,10 @@ async def debug_api():
                 age_c[ag] = age_c.get(ag, 0) + 1
             passing = [a for a in animals if _rg_passes(a, "All")]
             result["sources"]["rescuegroups"] = {
-                "status":               "ok",
-                "total_page1":          len(animals),
-                "passing_all_filters":  len(passing),
-                "age_breakdown":        age_c,
+                "status":              "ok",
+                "total_page1":         len(animals),
+                "passing_all_filters": len(passing),
+                "age_breakdown":       age_c,
             }
         except Exception as e:
             result["sources"]["rescuegroups"] = {"status": "error", "detail": str(e)}
@@ -616,7 +609,6 @@ async def debug_api():
             "test_urls_found": len(test_urls),
             "sample_urls":     test_urls[:4],
             "cached_urls":     len(_fp_url_cache["urls"]),
-            "tip":             "If test_urls_found > 0 — hit /api/fp-refresh to fill all breeds.",
         }
     except Exception as e:
         result["sources"]["954_puppies"] = {"status": "error", "detail": str(e)}
