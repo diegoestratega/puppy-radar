@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Abby's Puppy Radar</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f9;color:#222;min-height:100vh}
+header{background:#fff;border-bottom:1px solid #e0e0e0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:100;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.brand{font-size:1.2rem;font-weight:700}
+.meta{font-size:0.75rem;color:#888}
+#refresh-btn{background:#4a90e2;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:0.85rem;cursor:pointer;font-weight:600}
+#refresh-btn:hover{background:#357abd}
+#refresh-btn:active{transform:scale(.97)}
+#refresh-btn:disabled{opacity:.6;cursor:default}
+nav{display:flex;background:#fff;border-bottom:2px solid #e8e8e8;padding:0 20px}
+nav button{background:none;border:none;border-bottom:3px solid transparent;padding:12px 18px;font-size:0.9rem;font-weight:600;color:#888;cursor:pointer;margin-bottom:-2px;transition:color .15s}
+nav button.active{color:#4a90e2;border-bottom-color:#4a90e2}
+main{max-width:900px;margin:0 auto;padding:20px 16px 80px}
+#breed-bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.breed-chip{background:#fff;border:2px solid #d0d7e0;border-radius:20px;padding:6px 14px;font-size:0.82rem;font-weight:600;cursor:pointer;transition:all .15s;color:#444}
+.breed-chip:hover{border-color:#4a90e2;color:#4a90e2}
+.breed-chip.active{background:#4a90e2;border-color:#4a90e2;color:#fff}
+#source-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+#source-bar .src-label{font-size:0.78rem;color:#888;font-weight:600;margin-right:2px}
+.src-btn{background:#fff;border:2px solid #d0d7e0;border-radius:20px;padding:5px 14px;font-size:0.8rem;font-weight:600;cursor:pointer;transition:all .15s;color:#555}
+.src-btn:hover{border-color:#4a90e2;color:#4a90e2}
+.src-btn.active{background:#4a90e2;border-color:#4a90e2;color:#fff}
+.src-btn.rescue.active{background:#1565c0;border-color:#1565c0;color:#fff}
+.src-btn.store.active{background:#795548;border-color:#795548;color:#fff}
+#sort-bar{display:flex;gap:8px;margin-bottom:20px;align-items:center}
+#sort-bar span{font-size:0.8rem;color:#888;margin-right:4px}
+.sort-btn{background:#fff;border:2px solid #d0d7e0;border-radius:8px;padding:5px 12px;font-size:0.8rem;font-weight:600;cursor:pointer;color:#555}
+.sort-btn.active{background:#f0f5ff;border-color:#4a90e2;color:#4a90e2}
+#status-msg{text-align:center;padding:40px 20px;font-size:0.95rem;color:#888}
+.stale-bar{text-align:right;font-size:0.72rem;color:#aaa;margin-bottom:6px;min-height:18px}
+.stale-bar .spin{display:inline-block;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#results-list,#fav-list,#hidden-list{display:flex;flex-direction:column;gap:14px}
+.card{background:#fff;border-radius:14px;box-shadow:0 1px 6px rgba(0,0,0,.07);display:flex;overflow:hidden;transition:box-shadow .15s,opacity .3s,max-height .35s,margin .35s}
+.card:hover{box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.card.card-rescue{border-left:4px solid #1565c0}
+.card.card-store{border-left:4px solid #795548}
+.card-photo{width:120px;min-height:120px;flex-shrink:0;background:#eef0f3;object-fit:cover}
+.card-photo.no-photo{display:flex;align-items:center;justify-content:center;font-size:2.5rem}
+.card-body{padding:14px 16px;flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.card-name{font-size:1rem;font-weight:700}
+.card-breed{font-size:0.82rem;color:#666}
+.badge{font-size:0.7rem;font-weight:700;padding:3px 8px;border-radius:10px;flex-shrink:0}
+.badge-new{background:#e8f5e9;color:#2e7d32}
+.badge-favorite{background:#fff8e1;color:#f57f17}
+.badge-viewed{background:#f3f3f3;color:#999}
+.card-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:0.8rem;color:#777}
+.card-meta span{display:flex;align-items:center;gap:3px}
+.price-tag{background:#e8f5e9;color:#2e7d32;font-weight:700;font-size:0.78rem;padding:3px 9px;border-radius:10px;flex-shrink:0}
+.card-note{font-size:0.78rem;color:#888;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-actions{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap}
+.btn{border:none;border-radius:8px;padding:6px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;transition:opacity .15s}
+.btn:hover{opacity:.82}
+.btn-open{background:#4a90e2;color:#fff}
+.btn-fav{background:#fff8e1;color:#e65100;border:1px solid #ffe082}
+.btn-hide{background:#f3f3f3;color:#666;border:1px solid #ddd}
+.btn-unhide{background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7}
+.btn-unfav{background:#fce4ec;color:#c62828;border:1px solid #f48fb1}
+.btn-note{background:#f0f5ff;color:#4a90e2;border:1px solid #bbdefb}
+.src-rescue{color:#1565c0;font-weight:600}
+.src-store{color:#795548;font-weight:600}
+#note-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:center;justify-content:center}
+#note-modal.open{display:flex}
+#note-box{background:#fff;border-radius:16px;padding:24px;width:340px;max-width:92vw;box-shadow:0 8px 32px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:14px}
+#note-box h3{font-size:1rem}
+#note-text{border:1px solid #ddd;border-radius:8px;padding:10px;font-size:0.9rem;resize:vertical;min-height:80px;font-family:inherit}
+.row{display:flex;gap:10px;justify-content:flex-end}
+#note-save{background:#4a90e2;color:#fff;border:none;border-radius:8px;padding:8px 18px;font-weight:600;cursor:pointer}
+#note-cancel{background:#f3f3f3;color:#555;border:none;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer}
+.empty-state{text-align:center;padding:60px 20px;color:#aaa;font-size:0.95rem}
+.empty-state .icon{font-size:3rem;display:block;margin-bottom:12px}
+@media(max-width:500px){
+  .card-photo{width:90px;min-height:90px}
+  .card-name{font-size:0.9rem}
+  nav button{padding:12px 12px;font-size:0.82rem}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="brand">&#x1F43E; Abby's Puppy Radar</div>
+    <div class="meta">ZIP 33179 &middot; 30 mi &middot; small &amp; low-shedding</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span class="meta" id="last-updated"></span>
+    <button id="refresh-btn" onclick="hardRefresh()">&#x21bb; Refresh</button>
+  </div>
+</header>
+
+<nav>
+  <button class="active" onclick="switchTab('search',this)">Search</button>
+  <button onclick="switchTab('favorites',this)">&#9733; Abby's Saves</button>
+  <button onclick="switchTab('hidden',this)">Hidden</button>
+</nav>
+
+<main>
+  <div id="tab-search">
+    <div id="breed-bar"></div>
+    <div id="source-bar">
+      <span class="src-label">Source:</span>
+      <button class="src-btn active" onclick="setSource('all',this)">&#x1F43E; All</button>
+      <button class="src-btn rescue"  onclick="setSource('rescue',this)">&#x1F3E0; Rescue / Shelter</button>
+      <button class="src-btn store"   onclick="setSource('store',this)">&#x1F3EA; Pet Store</button>
+    </div>
+    <div id="sort-bar">
+      <span>Sort:</span>
+      <button class="sort-btn active" id="sort-newest"  onclick="setSort('newest')">Newest first</button>
+      <button class="sort-btn"        id="sort-closest" onclick="setSort('closest')">Closest first</button>
+    </div>
+    <div id="status-msg"></div>
+    <div class="stale-bar" id="stale-bar"></div>
+    <div id="results-list"></div>
+  </div>
+  <div id="tab-favorites" style="display:none"><div id="fav-list"></div></div>
+  <div id="tab-hidden"    style="display:none"><div id="hidden-list"></div></div>
+</main>
+
+<div id="note-modal">
+  <div id="note-box">
+    <h3>Abby's note</h3>
+    <textarea id="note-text" placeholder="e.g. Already contacted, looks great!"></textarea>
+    <div class="row">
+      <button id="note-cancel" onclick="closeNoteCancel()">Cancel</button>
+      <button id="note-save"   onclick="saveNote()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── App state ─────────────────────────────────────────────────────────────
+let currentBreed  = "All";
+let currentSort   = "newest";
+let currentSource = "all";
+let currentTab    = "search";
+let noteTargetId  = null;
+
+// ── localStorage cache ────────────────────────────────────────────────────
+const LS_KEY = "puppy_v2";
+const LS_TTL = 3 * 60 * 1000;  // 3 minutes
+
+function lsKey() {
+  return `${LS_KEY}_${currentBreed}_${currentSource}_${currentSort}`;
+}
+function lsSave(data) {
+  try {
+    const store = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+    store[lsKey()] = { data, ts: Date.now() };
+    // Keep only last 20 entries to avoid storage bloat
+    const keys = Object.keys(store);
+    if (keys.length > 20) delete store[keys[0]];
+    localStorage.setItem(LS_KEY, JSON.stringify(store));
+  } catch(e) {}
+}
+function lsGet() {
+  try {
+    const store = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+    const entry = store[lsKey()];
+    if (entry && (Date.now() - entry.ts) < LS_TTL) return entry.data;
+  } catch(e) {}
+  return null;
+}
+function lsClear() {
+  try { localStorage.removeItem(LS_KEY); } catch(e) {}
+}
+
+// ── HTML escape ───────────────────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return "";
+  return String(s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;").replace(/`/g,"&#96;");
+}
+
+// ── Silent API write ──────────────────────────────────────────────────────
+async function postState(id, status, note = "") {
+  await fetch("/api/state", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ listing_id: id, status, note }),
+  });
+}
+
+// ── Smooth card removal ───────────────────────────────────────────────────
+function fadeRemove(id) {
+  const card = document.getElementById("card-" + id);
+  if (!card) return;
+  card.style.maxHeight   = card.offsetHeight + "px";
+  card.style.overflow    = "hidden";
+  card.style.transition  = "opacity .3s, max-height .35s .05s, margin-bottom .35s .05s";
+  requestAnimationFrame(() => {
+    card.style.opacity = "0"; card.style.maxHeight = "0"; card.style.marginBottom = "0";
+    setTimeout(() => card.remove(), 420);
+  });
+}
+
+function patchBadge(id, cls, txt) {
+  const el = document.getElementById("badge-" + id);
+  if (el) { el.className = "badge " + cls; el.textContent = txt; }
+}
+function swapBtn(id, fromCls, toCls, toText, newOnclick) {
+  const card = document.getElementById("card-" + id);
+  if (!card) return;
+  const btn = card.querySelector("." + fromCls);
+  if (btn) { btn.className = "btn " + toCls; btn.textContent = toText; btn.setAttribute("onclick", newOnclick); }
+}
+
+// ── Card actions ──────────────────────────────────────────────────────────
+async function savePuppy(id) {
+  await postState(id, "favorite", currentNoteFor(id));
+  patchBadge(id, "badge-favorite", "★ Saved");
+  swapBtn(id, "btn-fav", "btn-unfav", "✕ Unsave", `unsavePuppy('${id}')`);
+}
+async function unsavePuppy(id) {
+  await postState(id, "none", "");
+  if (currentTab === "favorites") { fadeRemove(id); return; }
+  patchBadge(id, "badge-viewed", "Viewed");
+  swapBtn(id, "btn-unfav", "btn-fav", "★ Save", `savePuppy('${id}')`);
+}
+async function hidePuppy(id) {
+  await postState(id, "hide", currentNoteFor(id));
+  fadeRemove(id);
+}
+async function unhidePuppy(id) {
+  await postState(id, "none", "");
+  fadeRemove(id);
+}
+async function markViewed(id) {
+  const s = await fetch("/api/state").then(r => r.json());
+  if (s[id]) return;
+  await postState(id, "viewed", "");
+  patchBadge(id, "badge-viewed", "Viewed");
+}
+function currentNoteFor(id) {
+  const card = document.getElementById("card-" + id);
+  if (!card) return "";
+  const el = card.querySelector(".card-note");
+  return el ? el.textContent.replace(/^📝\s*/, "").trim() : "";
+}
+
+// ── Note modal ────────────────────────────────────────────────────────────
+function openNote(id) {
+  noteTargetId = id;
+  document.getElementById("note-text").value = currentNoteFor(id);
+  document.getElementById("note-modal").classList.add("open");
+  document.getElementById("note-text").focus();
+}
+function closeNoteCancel() {
+  document.getElementById("note-modal").classList.remove("open");
+  noteTargetId = null;
+}
+async function saveNote() {
+  if (!noteTargetId) return;
+  const id   = noteTargetId;
+  const note = document.getElementById("note-text").value.trim();
+  const s    = await fetch("/api/state").then(r => r.json());
+  await postState(id, (s[id] || {}).status || "viewed", note);
+  const card = document.getElementById("card-" + id);
+  if (card) {
+    let el = card.querySelector(".card-note");
+    if (note) {
+      if (el) { el.textContent = "📝 " + note; }
+      else {
+        el = document.createElement("div"); el.className = "card-note"; el.textContent = "📝 " + note;
+        const act = card.querySelector(".card-actions");
+        if (act) act.parentNode.insertBefore(el, act);
+      }
+    } else if (el) el.remove();
+  }
+  closeNoteCancel();
+}
+document.getElementById("note-modal").addEventListener("click", e => {
+  if (e.target === document.getElementById("note-modal")) closeNoteCancel();
+});
+
+// ── Card builder ──────────────────────────────────────────────────────────
+function buildCard(item, opts = {}) {
+  const { showUnhide = false, showUnfav = false } = opts;
+  const isStore = item.source_type === "store";
+  const srcCls  = isStore ? "src-store"  : "src-rescue";
+  const srcIcon = isStore ? "🏪"         : "🏠";
+  const cardCls = isStore ? "card-store" : "card-rescue";
+
+  const badgeCls = item.status === "favorite" ? "badge-favorite"
+                 : item.status === "viewed"   ? "badge-viewed" : "badge-new";
+  const badgeTxt = item.status === "favorite" ? "★ Saved"
+                 : item.status === "viewed"   ? "Viewed"       : "New";
+
+  const photo = item.photo_url
+    ? `<img class="card-photo" src="${esc(item.photo_url)}" alt="${esc(item.name)}" loading="lazy"
+         onerror="this.outerHTML='<div class=\\'card-photo no-photo\\'>🐶</div>'">`
+    : `<div class="card-photo no-photo">🐶</div>`;
+
+  const metas = [
+    item.age_text        ? `<span>🎂 ${esc(item.age_text)}</span>` : "",
+    item.sex             ? `<span>${item.sex==="Female"?"♀":"♂"} ${esc(item.sex)}</span>` : "",
+    item.distance_miles != null ? `<span>📍 ${parseFloat(item.distance_miles).toFixed(1)} mi</span>` : "",
+    item.city            ? `<span>🏙 ${esc(item.city)}${item.state?", "+esc(item.state):""}</span>` : "",
+    `<span class="${srcCls}">${srcIcon} ${esc(item.source)}</span>`,
+  ].join("");
+
+  const priceBadge = item.price ? `<span class="price-tag">${esc(item.price)}</span>` : "";
+  const noteHtml   = item.note  ? `<div class="card-note">📝 ${esc(item.note)}</div>` : "";
+
+  const btnOpen = item.url
+    ? `<button class="btn btn-open" onclick="window.open('${esc(item.url)}','_blank');markViewed('${esc(item.id)}')">Open ↗</button>`
+    : "";
+  const btnFav  = (showUnfav || item.status === "favorite")
+    ? `<button class="btn btn-unfav" onclick="unsavePuppy('${esc(item.id)}')">✕ Unsave</button>`
+    : `<button class="btn btn-fav"   onclick="savePuppy('${esc(item.id)}')">★ Save</button>`;
+  const btnHide = showUnhide
+    ? `<button class="btn btn-unhide" onclick="unhidePuppy('${esc(item.id)}')">↩ Unhide</button>`
+    : `<button class="btn btn-hide"   onclick="hidePuppy('${esc(item.id)}')">Hide</button>`;
+  const btnNote = `<button class="btn btn-note" onclick="openNote('${esc(item.id)}')">📝 Note</button>`;
+
+  return `
+<div class="card ${cardCls}" id="card-${esc(item.id)}">
+  ${photo}
+  <div class="card-body">
+    <div class="card-top">
+      <div>
+        <div class="card-name">${esc(item.name)}</div>
+        <div class="card-breed">${esc(item.breed)}${item.breed_secondary?" / "+esc(item.breed_secondary):""}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+        ${priceBadge}
+        <span class="badge ${badgeCls}" id="badge-${esc(item.id)}">${badgeTxt}</span>
+      </div>
+    </div>
+    <div class="card-meta">${metas}</div>
+    ${noteHtml}
+    <div class="card-actions">${btnOpen}${btnFav}${btnHide}${btnNote}</div>
+  </div>
+</div>`;
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────
+function renderResults(data, stale = false) {
+  const msg  = document.getElementById("status-msg");
+  const list = document.getElementById("results-list");
+  msg.textContent = "";
+  if (!data.results || !data.results.length) {
+    msg.innerHTML = '<div class="empty-state"><span class="icon">🐾</span>No puppies found matching your filters.</div>';
+    list.innerHTML = "";
+    return;
+  }
+  list.innerHTML = data.results.map(item => buildCard(item)).join("");
+  const upd = document.getElementById("last-updated");
+  upd.textContent = "Updated " + new Date().toLocaleTimeString();
+}
+
+function setStaleBar(html) {
+  document.getElementById("stale-bar").innerHTML = html;
+}
+
+// ── Main load — instant from cache, then background refresh ───────────────
+async function loadResults(force = false) {
+  const msg  = document.getElementById("status-msg");
+  const list = document.getElementById("results-list");
+
+  if (!force) {
+    const cached = lsGet();
+    if (cached) {
+      // Step 1: show cached immediately (0ms perceived load)
+      renderResults(cached, true);
+      setStaleBar('<span class="spin">↻</span> Refreshing in background…');
+      // Step 2: silently fetch fresh data
+      _fetchAndRender(false);
+      return;
+    }
+  }
+
+  // No cache or forced — show spinner and wait
+  msg.innerHTML = '<span style="color:#aaa">Loading puppies…</span>';
+  list.innerHTML = "";
+  setStaleBar("");
+  await _fetchAndRender(true);
+}
+
+async function _fetchAndRender(showSpinner) {
+  try {
+    const url  = `/api/search?breed=${encodeURIComponent(currentBreed)}&sort=${currentSort}&source=${currentSource}`;
+    const data = await fetch(url).then(r => r.json());
+    lsSave(data);
+    renderResults(data, false);
+    // Show cache freshness info
+    if (data.cache) {
+      const minTTL = Math.min(data.cache.rg_ttl || 0, data.cache.mdas_ttl || 0);
+      const freshIn = minTTL > 0 ? `Next refresh in ~${Math.ceil(minTTL/60)} min` : "Live data";
+      setStaleBar(`${freshIn} &middot; ${data.cache.fp_pages || 0} puppies cached`);
+    } else {
+      setStaleBar("");
+    }
+  } catch(e) {
+    if (showSpinner) {
+      document.getElementById("status-msg").innerHTML =
+        '<div class="empty-state"><span class="icon">⚠️</span>Error loading results.</div>';
+    }
+    setStaleBar("");
+  }
+}
+
+// ── Hard refresh (busts all caches) ──────────────────────────────────────
+async function hardRefresh() {
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true;
+  btn.textContent = "↻ Refreshing…";
+  lsClear();
+  try {
+    await fetch("/api/cache-clear", { method: "POST" });
+  } catch(e) {}
+  await loadResults(true);
+  btn.disabled = false;
+  btn.textContent = "↻ Refresh";
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  currentTab = tab;
+  document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById("tab-search").style.display    = tab==="search"    ? "" : "none";
+  document.getElementById("tab-favorites").style.display = tab==="favorites" ? "" : "none";
+  document.getElementById("tab-hidden").style.display    = tab==="hidden"    ? "" : "none";
+  if (tab==="search")    loadResults();
+  if (tab==="favorites") loadFavorites();
+  if (tab==="hidden")    loadHidden();
+}
+
+async function loadBreeds() {
+  try {
+    const data = await fetch("/api/breeds").then(r => r.json());
+    const bar  = document.getElementById("breed-bar");
+    bar.innerHTML = "";
+    data.breeds.forEach(b => {
+      const btn = document.createElement("button");
+      btn.className   = "breed-chip" + (b===currentBreed?" active":"");
+      btn.textContent = b;
+      btn.onclick = () => {
+        currentBreed = b;
+        document.querySelectorAll(".breed-chip").forEach(c => c.classList.remove("active"));
+        btn.classList.add("active");
+        loadResults();
+      };
+      bar.appendChild(btn);
+    });
+  } catch(e) {}
+}
+
+function setSource(src, btn) {
+  currentSource = src;
+  document.querySelectorAll(".src-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  loadResults();
+}
+function setSort(s) {
+  currentSort = s;
+  document.getElementById("sort-newest").classList.toggle("active",  s==="newest");
+  document.getElementById("sort-closest").classList.toggle("active", s==="closest");
+  loadResults();
+}
+
+async function loadFavorites() {
+  const list = document.getElementById("fav-list");
+  list.innerHTML = "Loading…";
+  try {
+    const [saved, data] = await Promise.all([
+      fetch("/api/favorites").then(r => r.json()),
+      fetch("/api/search?breed=All&sort=newest&source=all").then(r => r.json()),
+    ]);
+    if (!saved.length) {
+      list.innerHTML = '<div class="empty-state"><span class="icon">★</span>No saved puppies yet.</div>';
+      return;
+    }
+    const savedIds = new Set(saved.map(s => s.id));
+    const items    = (data.results || []).filter(x => savedIds.has(x.id));
+    list.innerHTML = items.length
+      ? items.map(item => buildCard(item, { showUnfav: true })).join("")
+      : '<div class="empty-state"><span class="icon">★</span>Saved puppies not found in current results.</div>';
+  } catch(e) {
+    list.innerHTML = '<div class="empty-state"><span class="icon">⚠️</span>Error loading favorites.</div>';
+  }
+}
+
+async function loadHidden() {
+  const list = document.getElementById("hidden-list");
+  list.innerHTML = "Loading…";
+  try {
+    const [stateMap, data] = await Promise.all([
+      fetch("/api/state").then(r => r.json()),
+      fetch("/api/search?breed=All&sort=newest&source=all").then(r => r.json()),
+    ]);
+    const hiddenIds = Object.keys(stateMap).filter(id => stateMap[id].status === "hidden");
+    if (!hiddenIds.length) {
+      list.innerHTML = '<div class="empty-state"><span class="icon">👁</span>Nothing hidden yet.</div>';
+      return;
+    }
+    const byId = {};
+    (data.results || []).forEach(r => { byId[r.id] = r; });
+    list.innerHTML = hiddenIds.map(id => {
+      const full = byId[id] || { id, name: id, breed:"", source_type:"rescue", source:"", photo_url:"", url:"", note: stateMap[id].note||"", status:"hidden" };
+      full.status = "hidden";
+      return buildCard(full, { showUnhide: true });
+    }).join("");
+  } catch(e) {
+    list.innerHTML = '<div class="empty-state"><span class="icon">⚠️</span>Error loading hidden items.</div>';
+  }
+}
+
+loadBreeds();
+loadResults();
+</script>
+</body>
+</html>
