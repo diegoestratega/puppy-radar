@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import json
 import os
 import re
@@ -14,7 +13,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from playwright.sync_api import sync_playwright
 from pydantic import BaseModel
 
 load_dotenv()
@@ -50,19 +48,6 @@ FP_BASE            = "https://954puppies.com"
 
 _fp_url_cache: dict = {"urls": [], "cached_at": 0.0}
 FP_CACHE_TTL        = 1800  # 30 minutes
-
-# --single-process + --no-zygote = Chromium fits inside 512MB on Render free tier
-PLAYWRIGHT_ARGS = [
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--single-process",
-    "--disable-setuid-sandbox",
-    "--no-zygote",
-]
-
-# max_workers=1 — only one Playwright thread at a time on free tier
-_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 RG_ALLOWED_AGE_GROUPS  = {"baby", "young"}
 RG_ALLOWED_SIZE_GROUPS = {"small"}
@@ -139,11 +124,14 @@ def matches_breed(name: str, primary: str, secondary: str, filt: str) -> bool:
 
 
 def _make_absolute(url: str, base: str) -> str:
-    if not url or url.startswith("http"):
-        return url or ""
-    p = urlparse(base)
-    root = f"{p.scheme}://{p.netloc}"
-    return root + url if url.startswith("/") else f"{root}/{url.lstrip('/')}"
+    if not url:
+        return ""
+    if url.startswith("http"):
+        return url
+    if url.startswith("/"):
+        p = urlparse(base)
+        return f"{p.scheme}://{p.netloc}{url}"
+    return url
 
 
 def _extract_sex(text: str) -> str:
@@ -187,6 +175,7 @@ def _rg_has_years(s: str) -> bool:
 
 
 def _is_valid_fp_url(url: str) -> bool:
+    """Accept ONLY /puppies/{breed-slug}/{5+ digit id}"""
     path = urlparse(url).path.lower().rstrip("/")
     segs = [s for s in path.split("/") if s]
     if len(segs) != 3 or segs[0] != "puppies":
@@ -317,66 +306,79 @@ async def fetch_rescuegroups(bf: str) -> list:
     return out
 
 
-# ── 954 Puppies — sync_playwright, one fresh browser per breed ────────────
+# ── 954 Puppies — pure httpx, no browser needed ───────────────────────────
 #
-# KEY FIX: Each breed gets its own isolated browser launch via
-# _fp_sync_scrape_one_breed(). The old shared-browser loop crashed after
-# the first breed (bichonpoo) because --single-process exhausted 512MB RAM.
+# 954puppies.com runs on Astro which server-renders all HTML.
+# No JavaScript execution needed — plain httpx fetches return full DOM.
+# All 23 breed pages are fetched concurrently (semaphore=5 to be polite).
+# Total refresh time: ~10-15 seconds instead of 5+ minutes with Playwright.
 
-def _fp_sync_scrape_one_breed(breed_slug: str) -> list[str]:
-    """Fresh browser launch per breed — no RAM accumulation between breeds."""
+async def _fp_fetch_breed_urls(
+    client: httpx.AsyncClient, slug: str
+) -> list[str]:
+    """
+    Fetch one breed listing page and extract all valid individual puppy URLs.
+    Works because Astro pre-renders the puppy card links server-side.
+    """
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=PLAYWRIGHT_ARGS)
-            page    = browser.new_page(user_agent=SCRAPER_HEADERS["User-Agent"])
-            page.goto(
-                f"{FP_BASE}/puppies-for-sale/{breed_slug}",
-                wait_until="domcontentloaded",
-                timeout=25_000,
-            )
-            page.wait_for_timeout(2_500)
-            try:
-                page.wait_for_function(
-                    f'document.querySelectorAll(\'a[href*="/puppies/{breed_slug}/\"]\').length > 0',
-                    timeout=7_000,
-                )
-            except Exception:
-                pass
-            hrefs: list[str] = page.eval_on_selector_all(
-                "a[href]",
-                "els => [...new Set(els.map(el => el.href))]",
-            )
-            browser.close()
-            return [u for u in hrefs if _is_valid_fp_url(u)]
+        r = await client.get(
+            f"{FP_BASE}/puppies-for-sale/{slug}",
+            timeout=15.0,
+        )
+        if r.status_code != 200:
+            return []
+
+        soup  = BeautifulSoup(r.text, "lxml")
+        found = set()
+
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            # Normalise to absolute URL
+            if href.startswith("/"):
+                href = f"{FP_BASE}{href}"
+            elif not href.startswith("http"):
+                continue
+            if _is_valid_fp_url(href):
+                found.add(href)
+
+        return list(found)
+
     except Exception:
         return []
 
 
-def _fp_sync_scrape_all_breeds() -> list[str]:
-    """
-    Loop through every breed, each with its own isolated browser session.
-    One browser crash no longer takes down the whole scrape.
-    """
-    all_urls: set[str] = set()
-    for slug in FP_BREED_SLUGS:
-        try:
-            urls = _fp_sync_scrape_one_breed(slug)
-            all_urls.update(urls)
-            time.sleep(0.3)  # small polite pause between launches
-        except Exception:
-            continue
-    return list(all_urls)
-
-
 async def _fp_refresh_cache() -> list[str]:
+    """Fetch all 23 breed listing pages concurrently and update the cache."""
     global _fp_url_cache
-    loop     = asyncio.get_event_loop()
-    url_list = await loop.run_in_executor(_thread_pool, _fp_sync_scrape_all_breeds)
+
+    sem = asyncio.Semaphore(5)
+
+    async def guarded(client: httpx.AsyncClient, slug: str) -> list[str]:
+        async with sem:
+            return await _fp_fetch_breed_urls(client, slug)
+
+    async with httpx.AsyncClient(
+        headers=SCRAPER_HEADERS,
+        follow_redirects=True,
+        timeout=20.0,
+    ) as client:
+        results = await asyncio.gather(
+            *[guarded(client, slug) for slug in FP_BREED_SLUGS],
+            return_exceptions=True,
+        )
+
+    all_urls: set[str] = set()
+    for r in results:
+        if isinstance(r, list):
+            all_urls.update(r)
+
+    url_list = list(all_urls)
     _fp_url_cache = {"urls": url_list, "cached_at": time.time()}
     return url_list
 
 
 async def _fp_get_all_urls() -> list[str]:
+    """Return cached URLs or refresh if stale / empty."""
     if _fp_url_cache["urls"] and (time.time() - _fp_url_cache["cached_at"]) < FP_CACHE_TTL:
         return _fp_url_cache["urls"]
     return await _fp_refresh_cache()
@@ -384,31 +386,29 @@ async def _fp_get_all_urls() -> list[str]:
 
 @app.on_event("startup")
 async def _on_startup():
+    """Warm the 954 Puppies cache in the background — fast now with httpx."""
     asyncio.create_task(_fp_refresh_cache())
 
 
 async def _fp_parse_detail(
     client: httpx.AsyncClient, url: str, bf: str
 ) -> dict | None:
+    """
+    Fetch an individual puppy detail page (static Astro HTML).
+    Extract name, photo, age, sex, price.
+    """
     try:
         r = await client.get(url, timeout=12.0)
-        if r.status_code != 200:
+        if r.status_code != 200 or not re.search(r"\$[\d,]+", r.text):
             return None
         html = r.text
     except Exception:
         return None
 
-    # Skip adopted/unavailable pages — no price means not for sale
-    if not re.search(r"\$[\d,]+", html):
-        return None
-
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "lxml")
     txt  = soup.get_text(" ", strip=True)
 
-    # Skip if page explicitly says adopted or sold
-    if re.search(r"\b(adopted|sold|no longer available)\b", txt, re.I):
-        return None
-
+    # Name from og:title: "Blu - French Bulldog Puppy | 954 Puppies"
     name = ""
     og   = soup.find("meta", property="og:title")
     if og:
@@ -431,6 +431,11 @@ async def _fp_parse_detail(
     if not matches_breed(name, breed_name, "", bf):
         return None
 
+    # Skip if page says "adopted" or "sold"
+    body_lower = txt.lower()
+    if any(w in body_lower for w in ("adopted", "this puppy has been", "no longer available")):
+        return None
+
     photo = ""
     og_img = soup.find("meta", property="og:image")
     if og_img:
@@ -438,8 +443,8 @@ async def _fp_parse_detail(
     if not photo:
         for img in soup.find_all("img"):
             src = img.get("src") or img.get("data-src") or ""
-            if src and "placeholder" not in src.lower():
-                photo = _make_absolute(src, url)
+            if src and "placeholder" not in src.lower() and src.startswith("http"):
+                photo = src
                 break
 
     age   = _age_from_birthdate(txt) or "Puppy"
@@ -472,13 +477,16 @@ async def fetch_954_puppies(bf: str) -> list:
     urls = await _fp_get_all_urls()
     if not urls:
         return []
+
     async with httpx.AsyncClient(
         timeout=30.0, follow_redirects=True, headers=SCRAPER_HEADERS
     ) as client:
         results = []
-        for i in range(0, min(len(urls), 100), 8):
+        # Process in batches of 10 concurrently
+        for i in range(0, min(len(urls), 150), 10):
+            batch = urls[i:i+10]
             for r in await asyncio.gather(
-                *[_fp_parse_detail(client, u, bf) for u in urls[i:i+8]],
+                *[_fp_parse_detail(client, u, bf) for u in batch],
                 return_exceptions=True,
             ):
                 if isinstance(r, dict) and r:
@@ -486,10 +494,10 @@ async def fetch_954_puppies(bf: str) -> list:
         return results
 
 
-# ── Miami-Dade ────────────────────────────────────────────────────────────
+# ── Miami-Dade Animal Services ────────────────────────────────────────────
 
 def _parse_mdas(html: str, base: str, bf: str) -> list:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "lxml")
     out, seen = [], set()
     cards = (
         soup.find_all("div", class_=re.compile(r"animal|pet|dog|result|card|listing", re.I)) or
@@ -516,7 +524,9 @@ def _parse_mdas(html: str, base: str, bf: str) -> list:
         if not matches_breed(name, breed, "", bf):
             continue
         img = card.find("img")
-        ph  = _make_absolute(photo_str(img.get("src") or img.get("data-src") or ""), base) if img else ""
+        ph  = _make_absolute(
+            (img.get("src") or img.get("data-src") or ""), base
+        ) if img else ""
         lk  = card.find("a", href=True)
         out.append({
             "id":              f"mdas_{re.sub(r'[^a-z0-9]', '_', name.lower())}",
@@ -575,10 +585,11 @@ async def debug_api():
         "fp_breed_count":   len(FP_BREED_SLUGS),
         "fp_cached_urls":   len(_fp_url_cache["urls"]),
         "fp_cache_age_sec": cache_age if cache_age < 1_000_000 else "cache not yet populated",
-        "playwright_mode":  "sync_playwright — isolated browser per breed (RAM-safe)",
+        "scraping_mode":    "pure httpx — no browser, no Playwright",
         "sources":          {},
     }
 
+    # RescueGroups
     if RG_KEY:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -598,21 +609,25 @@ async def debug_api():
         except Exception as e:
             result["sources"]["rescuegroups"] = {"status": "error", "detail": str(e)}
 
+    # 954 Puppies — test one breed page quickly
     try:
-        loop      = asyncio.get_event_loop()
-        test_urls = await loop.run_in_executor(
-            _thread_pool, _fp_sync_scrape_one_breed, "maltese"
-        )
+        async with httpx.AsyncClient(
+            headers=SCRAPER_HEADERS, follow_redirects=True, timeout=15.0
+        ) as client:
+            test_urls = await _fp_fetch_breed_urls(client, "maltese")
+
         result["sources"]["954_puppies"] = {
             "status":          "ok",
             "test_breed":      "maltese",
             "test_urls_found": len(test_urls),
             "sample_urls":     test_urls[:4],
             "cached_urls":     len(_fp_url_cache["urls"]),
+            "note":            "httpx only — no browser. If test_urls_found=0, page may be JS-rendered.",
         }
     except Exception as e:
         result["sources"]["954_puppies"] = {"status": "error", "detail": str(e)}
 
+    # Miami-Dade
     try:
         mdas = await fetch_miami_dade("All")
         result["sources"]["miami_dade"] = {
@@ -628,15 +643,22 @@ async def debug_api():
 
 @app.get("/api/fp-refresh")
 async def fp_refresh():
+    """
+    Refresh 954 Puppies URL cache using httpx.
+    Should complete in ~10-15 seconds (vs 5+ minutes with Playwright).
+    """
+    t0   = time.time()
     urls = await _fp_refresh_cache()
+    elapsed = round(time.time() - t0, 1)
     cached_until = datetime.utcfromtimestamp(
         _fp_url_cache["cached_at"] + FP_CACHE_TTL
     ).strftime("%Y-%m-%d %H:%M UTC")
     return {
-        "status":       "ok",
-        "urls_found":   len(urls),
-        "cached_until": cached_until,
-        "sample":       urls[:5],
+        "status":         "ok",
+        "urls_found":     len(urls),
+        "elapsed_sec":    elapsed,
+        "cached_until":   cached_until,
+        "sample":         urls[:5],
     }
 
 
