@@ -45,18 +45,10 @@ FP_BREED_SLUGS = [
 ]
 FP_BREED_SLUGS_SET = set(FP_BREED_SLUGS)
 FP_BASE            = "https://954puppies.com"
-
-# Sitemap paths to try — Astro generates one of these
-FP_SITEMAP_PATHS = [
-    "/sitemap.xml",
-    "/sitemap-index.xml",
-    "/sitemap_index.xml",
-    "/pages-sitemap.xml",
-    "/sitemap/sitemap-index.xml",
-]
+FP_CACHE_FILE      = BASE_DIR / "static" / "fp_cache.json"
+FP_CACHE_TTL       = 43200  # 12 hours — GitHub Actions runs every 6h so file is always fresh
 
 _fp_url_cache: dict = {"urls": [], "cached_at": 0.0, "method": ""}
-FP_CACHE_TTL        = 1800  # 30 minutes
 
 RG_ALLOWED_AGE_GROUPS  = {"baby", "young"}
 RG_ALLOWED_SIZE_GROUPS = {"small"}
@@ -184,31 +176,13 @@ def _rg_has_years(s: str) -> bool:
 
 
 def _is_valid_fp_url(url: str) -> bool:
-    """Accept /puppies/{breed-slug}/{alphanumeric-id}"""
     path = urlparse(url).path.lower().rstrip("/")
     segs = [s for s in path.split("/") if s]
     if len(segs) != 3 or segs[0] != "puppies":
         return False
     if segs[1] not in FP_BREED_SLUGS_SET:
         return False
-    # Accept numeric IDs or short alphanumeric slugs (min 4 chars)
     return bool(re.match(r'^[a-z0-9-]{4,}$', segs[2]))
-
-
-def _extract_fp_urls_from_text(text: str) -> set[str]:
-    """
-    Extract all 954puppies puppy URLs from any text (HTML, JSON, XML).
-    Catches /puppies/{breed}/{id} in any format.
-    """
-    found = set()
-    pattern = r'(?:https?://954puppies\.com)?(/puppies/([a-z0-9-]+)/([a-z0-9-]{4,}))'
-    for m in re.finditer(pattern, text, re.I):
-        full_path = m.group(1)
-        slug      = m.group(2).lower()
-        pid       = m.group(3).lower()
-        if slug in FP_BREED_SLUGS_SET and re.match(r'^[a-z0-9-]{4,}$', pid):
-            found.add(f"{FP_BASE}{full_path}")
-    return found
 
 
 # ── RescueGroups ──────────────────────────────────────────────────────────
@@ -332,116 +306,122 @@ async def fetch_rescuegroups(bf: str) -> list:
     return out
 
 
-# ── 954 Puppies — sitemap + httpx ─────────────────────────────────────────
+# ── 954 Puppies ───────────────────────────────────────────────────────────
 #
-# Strategy (in order of preference):
-#   1. Sitemap XML  — single request, returns ALL puppy URLs at once (~1 sec)
-#   2. Listing HTML — fallback; extracts any embedded JSON/links from page source
-#
-# Why sitemap works: Astro generates /sitemap.xml listing every pre-rendered page.
-# Individual puppy pages are pre-rendered for SEO, so they appear in the sitemap.
-# Listing PAGES are NOT pre-rendered (they're client-side filtered), which is why
-# httpx returned 0 URLs from /puppies-for-sale/maltese.
-
-
-async def _fp_urls_from_sitemap(client: httpx.AsyncClient) -> tuple[list[str], str]:
-    """
-    Fetch the sitemap, follow sub-sitemaps if needed, return all matching puppy URLs.
-    Returns (url_list, sitemap_url_that_worked) or ([], "").
-    """
-    for path in FP_SITEMAP_PATHS:
-        url = f"{FP_BASE}{path}"
-        try:
-            r = await client.get(url, timeout=15.0)
-            if r.status_code != 200:
-                continue
-
-            content = r.text
-
-            # Check if sitemap index (contains links to other sitemaps)
-            sub_maps = re.findall(
-                r'<loc>\s*(https?://[^\s<]*sitemap[^\s<]*)\s*</loc>',
-                content, re.I
-            )
-
-            if sub_maps:
-                # Fetch all sub-sitemaps concurrently
-                responses = await asyncio.gather(
-                    *[client.get(sm, timeout=15.0) for sm in sub_maps[:30]],
-                    return_exceptions=True,
-                )
-                found: set[str] = set()
-                for resp in responses:
-                    if isinstance(resp, Exception):
-                        continue
-                    if hasattr(resp, "status_code") and resp.status_code == 200:
-                        found.update(_extract_fp_urls_from_text(resp.text))
-                if found:
-                    return list(found), url
-            else:
-                # Direct sitemap
-                found = _extract_fp_urls_from_text(content)
-                if found:
-                    return list(found), url
-
-        except Exception:
-            continue
-
-    return [], ""
-
-
-async def _fp_urls_from_listing_pages(client: httpx.AsyncClient) -> list[str]:
-    """
-    Fallback: fetch listing pages and extract any embedded puppy URLs from
-    the HTML source (including script tags with JSON data).
-    Works if Astro embeds hydration data server-side.
-    """
-    sem = asyncio.Semaphore(5)
-
-    async def fetch_one(slug: str) -> set[str]:
-        async with sem:
-            try:
-                r = await client.get(
-                    f"{FP_BASE}/puppies-for-sale/{slug}", timeout=15.0
-                )
-                if r.status_code != 200:
-                    return set()
-                return _extract_fp_urls_from_text(r.text)
-            except Exception:
-                return set()
-
-    results = await asyncio.gather(
-        *[fetch_one(slug) for slug in FP_BREED_SLUGS],
-        return_exceptions=True,
-    )
-
-    found: set[str] = set()
-    for r in results:
-        if isinstance(r, set):
-            found.update(r)
-    return list(found)
-
+# PRIMARY source: static/fp_cache.json written by GitHub Actions every 6h.
+# GitHub Actions runs Playwright (free Linux runner, plenty of RAM).
+# Render just reads the file — zero scraping, zero browser on the server.
+# FALLBACK: httpx sitemap/listing scan (usually returns 0 but won't crash).
 
 async def _fp_refresh_cache() -> list[str]:
     global _fp_url_cache
 
+    # ── Priority 1: GitHub Actions cache file ────────────────────────────
+    if FP_CACHE_FILE.exists():
+        try:
+            data     = json.loads(FP_CACHE_FILE.read_text())
+            urls     = data.get("urls", [])
+            saved_at = data.get("scraped_at", 0.0)
+            if urls and (time.time() - saved_at) < FP_CACHE_TTL:
+                _fp_url_cache = {
+                    "urls":      urls,
+                    "cached_at": saved_at,
+                    "method":    "github_actions_file",
+                }
+                return urls
+        except Exception:
+            pass
+
+    # ── Priority 2: httpx fallback (sitemap + listing pages) ─────────────
+    # 954puppies.com renders puppy cards via JS so httpx usually finds 0 URLs,
+    # but we try anyway in case something changed.
     async with httpx.AsyncClient(
         headers=SCRAPER_HEADERS, follow_redirects=True, timeout=20.0
     ) as client:
-        # ── Strategy 1: Sitemap ──────────────────────────────────────────
-        urls, sitemap_used = await _fp_urls_from_sitemap(client)
-        method = f"sitemap:{sitemap_used}" if urls else ""
+        # Try sitemap paths
+        sitemap_paths = [
+            "/sitemap.xml", "/sitemap-index.xml", "/sitemap_index.xml",
+            "/pages-sitemap.xml",
+        ]
+        all_urls: set[str] = set()
 
-        # ── Strategy 2: Listing page HTML (fallback) ─────────────────────
-        if not urls:
-            urls   = await _fp_urls_from_listing_pages(client)
-            method = "listing_pages_html" if urls else "none_found"
+        for path in sitemap_paths:
+            try:
+                r = await client.get(f"{FP_BASE}{path}", timeout=12.0)
+                if r.status_code == 200:
+                    found = _extract_fp_urls_from_text(r.text)
+                    # Follow sub-sitemaps
+                    sub_maps = re.findall(
+                        r'<loc>\s*(https?://[^\s<]*sitemap[^\s<]*)\s*</loc>',
+                        r.text, re.I
+                    )
+                    if sub_maps:
+                        responses = await asyncio.gather(
+                            *[client.get(sm, timeout=12.0) for sm in sub_maps[:20]],
+                            return_exceptions=True,
+                        )
+                        for resp in responses:
+                            if hasattr(resp, "status_code") and resp.status_code == 200:
+                                found.update(_extract_fp_urls_from_text(resp.text))
+                    if found:
+                        all_urls.update(found)
+                        break
+            except Exception:
+                continue
 
-    _fp_url_cache = {"urls": urls, "cached_at": time.time(), "method": method}
-    return urls
+        # Try listing pages if sitemap found nothing
+        if not all_urls:
+            sem = asyncio.Semaphore(5)
+
+            async def fetch_listing(slug: str) -> set[str]:
+                async with sem:
+                    try:
+                        r = await client.get(
+                            f"{FP_BASE}/puppies-for-sale/{slug}", timeout=12.0
+                        )
+                        if r.status_code == 200:
+                            return _extract_fp_urls_from_text(r.text)
+                    except Exception:
+                        pass
+                    return set()
+
+            results = await asyncio.gather(
+                *[fetch_listing(slug) for slug in FP_BREED_SLUGS],
+                return_exceptions=True,
+            )
+            for r in results:
+                if isinstance(r, set):
+                    all_urls.update(r)
+
+        url_list = list(all_urls)
+        method   = "httpx_fallback" if url_list else "none_found"
+        _fp_url_cache = {"urls": url_list, "cached_at": time.time(), "method": method}
+        return url_list
+
+
+def _extract_fp_urls_from_text(text: str) -> set[str]:
+    found   = set()
+    pattern = r'(?:https?://954puppies\.com)?(/puppies/([a-z0-9-]+)/([a-z0-9-]{4,}))'
+    for m in re.finditer(pattern, text, re.I):
+        slug = m.group(2).lower()
+        pid  = m.group(3).lower()
+        if slug in FP_BREED_SLUGS_SET and re.match(r'^[a-z0-9-]{4,}$', pid):
+            found.add(f"{FP_BASE}{m.group(1)}")
+    return found
 
 
 async def _fp_get_all_urls() -> list[str]:
+    # Always try the cache file first (refreshed by GitHub Actions every 6h)
+    if FP_CACHE_FILE.exists():
+        try:
+            data     = json.loads(FP_CACHE_FILE.read_text())
+            urls     = data.get("urls", [])
+            saved_at = data.get("scraped_at", 0.0)
+            if urls and (time.time() - saved_at) < FP_CACHE_TTL:
+                return urls
+        except Exception:
+            pass
+    # Fall back to in-memory cache
     if _fp_url_cache["urls"] and (time.time() - _fp_url_cache["cached_at"]) < FP_CACHE_TTL:
         return _fp_url_cache["urls"]
     return await _fp_refresh_cache()
@@ -449,6 +429,7 @@ async def _fp_get_all_urls() -> list[str]:
 
 @app.on_event("startup")
 async def _on_startup():
+    # Load the GitHub Actions cache file at startup (instant, no scraping)
     asyncio.create_task(_fp_refresh_cache())
 
 
@@ -463,21 +444,19 @@ async def _fp_parse_detail(
     except Exception:
         return None
 
-    # Skip pages with no price (not a real puppy listing)
     if not re.search(r"\$[\d,]+", html):
         return None
 
     soup = BeautifulSoup(html, "lxml")
     txt  = soup.get_text(" ", strip=True)
 
-    # Skip adopted/sold/unavailable puppies
+    # Skip adopted / sold
     body_lower = txt.lower()
     if any(w in body_lower for w in (
         "adopted", "this puppy has been", "no longer available", "sold",
     )):
         return None
 
-    # Name from og:title: "Blu - French Bulldog Puppy | 954 Puppies"
     name = ""
     og   = soup.find("meta", property="og:title")
     if og:
@@ -500,7 +479,7 @@ async def _fp_parse_detail(
     if not matches_breed(name, breed_name, "", bf):
         return None
 
-    photo = ""
+    photo  = ""
     og_img = soup.find("meta", property="og:image")
     if og_img:
         photo = og_img.get("content", "")
@@ -547,9 +526,8 @@ async def fetch_954_puppies(bf: str) -> list:
     ) as client:
         results = []
         for i in range(0, min(len(urls), 150), 10):
-            batch = urls[i:i+10]
             for r in await asyncio.gather(
-                *[_fp_parse_detail(client, u, bf) for u in batch],
+                *[_fp_parse_detail(client, u, bf) for u in urls[i:i+10]],
                 return_exceptions=True,
             ):
                 if isinstance(r, dict) and r:
@@ -642,17 +620,30 @@ def get_breeds():
 
 @app.get("/api/debug")
 async def debug_api():
-    cache_age = round(time.time() - _fp_url_cache["cached_at"])
+    # Check cache file
+    cache_file_info = {"exists": False}
+    if FP_CACHE_FILE.exists():
+        try:
+            data = json.loads(FP_CACHE_FILE.read_text())
+            age  = round(time.time() - data.get("scraped_at", 0))
+            cache_file_info = {
+                "exists":    True,
+                "url_count": data.get("count", len(data.get("urls", []))),
+                "age_sec":   age,
+                "age_hours": round(age / 3600, 1),
+            }
+        except Exception as e:
+            cache_file_info = {"exists": True, "error": str(e)}
+
     result = {
-        "rescuegroups_key": bool(RG_KEY),
-        "fp_breed_count":   len(FP_BREED_SLUGS),
-        "fp_cached_urls":   len(_fp_url_cache["urls"]),
-        "fp_cache_method":  _fp_url_cache.get("method", "none"),
-        "fp_cache_age_sec": cache_age if cache_age < 1_000_000 else "cache not yet populated",
-        "sources":          {},
+        "rescuegroups_key":  bool(RG_KEY),
+        "fp_breed_count":    len(FP_BREED_SLUGS),
+        "fp_cached_urls":    len(_fp_url_cache["urls"]),
+        "fp_cache_method":   _fp_url_cache.get("method", "none"),
+        "fp_cache_file":     cache_file_info,
+        "sources":           {},
     }
 
-    # RescueGroups
     if RG_KEY:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -672,36 +663,17 @@ async def debug_api():
         except Exception as e:
             result["sources"]["rescuegroups"] = {"status": "error", "detail": str(e)}
 
-    # 954 Puppies — test sitemap + one listing page
-    async with httpx.AsyncClient(headers=SCRAPER_HEADERS, follow_redirects=True, timeout=15.0) as client:
-        # Test sitemap
-        sitemap_urls, sitemap_found_at = await _fp_urls_from_sitemap(client)
-
-        # Test one listing page
-        try:
-            r = await client.get(f"{FP_BASE}/puppies-for-sale/maltese", timeout=12.0)
-            listing_status  = r.status_code
-            listing_len     = len(r.text)
-            listing_urls    = list(_extract_fp_urls_from_text(r.text))
-            listing_snippet = r.text[:500].replace("\n", " ")
-        except Exception as e:
-            listing_status  = 0
-            listing_len     = 0
-            listing_urls    = []
-            listing_snippet = str(e)
-
     result["sources"]["954_puppies"] = {
-        "sitemap_urls_found":   len(sitemap_urls),
-        "sitemap_found_at":     sitemap_found_at or "none worked",
-        "sitemap_sample":       sitemap_urls[:3],
-        "listing_http_status":  listing_status,
-        "listing_html_length":  listing_len,
-        "listing_urls_in_html": len(listing_urls),
-        "listing_html_snippet": listing_snippet,
-        "cached_urls":          len(_fp_url_cache["urls"]),
+        "cache_file_urls": cache_file_info.get("url_count", 0),
+        "cache_file_age":  f"{cache_file_info.get('age_hours', '?')}h",
+        "in_memory_urls":  len(_fp_url_cache["urls"]),
+        "method":          _fp_url_cache.get("method", "none"),
+        "note": (
+            "URLs come from GitHub Actions scraper (runs every 6h). "
+            "If cache_file_urls=0, trigger the Action manually on GitHub."
+        ),
     }
 
-    # Miami-Dade
     try:
         mdas = await fetch_miami_dade("All")
         result["sources"]["miami_dade"] = {
@@ -717,18 +689,26 @@ async def debug_api():
 
 @app.get("/api/fp-refresh")
 async def fp_refresh():
+    """Force re-read the GitHub Actions cache file and return status."""
     t0   = time.time()
     urls = await _fp_refresh_cache()
     elapsed = round(time.time() - t0, 1)
-    cached_until = datetime.utcfromtimestamp(
-        _fp_url_cache["cached_at"] + FP_CACHE_TTL
-    ).strftime("%Y-%m-%d %H:%M UTC")
+
+    file_age = "N/A"
+    if FP_CACHE_FILE.exists():
+        try:
+            data     = json.loads(FP_CACHE_FILE.read_text())
+            age_sec  = round(time.time() - data.get("scraped_at", 0))
+            file_age = f"{round(age_sec/3600, 1)}h ago"
+        except Exception:
+            pass
+
     return {
         "status":       "ok",
         "urls_found":   len(urls),
         "method_used":  _fp_url_cache.get("method", ""),
         "elapsed_sec":  elapsed,
-        "cached_until": cached_until,
+        "file_age":     file_age,
         "sample":       urls[:5],
     }
 
