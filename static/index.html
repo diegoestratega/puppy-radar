@@ -1,981 +1,967 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Puppy Radar</title>
   <style>
-    :root{
-      --bg:#f6f7fb;
-      --panel:#ffffff;
-      --panel-2:#f2f4f8;
-      --text:#18212b;
-      --muted:#64748b;
-      --line:#dbe2ea;
-      --brand:#0f766e;
-      --brand-2:#0b5f59;
-      --accent:#e6fffb;
-      --warn:#b45309;
-      --danger:#b91c1c;
-      --gold:#f59e0b;
-      --shadow:0 10px 30px rgba(15,23,42,.08);
-      --radius:18px;
-      --radius-sm:12px;
+    :root {
+      --bg: #f6f7fb;
+      --card: #ffffff;
+      --text: #1d2433;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --success: #15803d;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --chip: #eef2ff;
+      --shadow: 0 10px 25px rgba(0, 0, 0, 0.06);
+      --radius: 16px;
     }
 
-    *{box-sizing:border-box}
-    html,body{margin:0;padding:0}
-    body{
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: linear-gradient(180deg,#f8fafc 0%, #f2f6fb 100%);
-      color:var(--text);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
     }
 
-    .wrap{
-      max-width:1400px;
-      margin:0 auto;
-      padding:24px 18px 48px;
+    .app {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
     }
 
-    .hero{
-      background: radial-gradient(circle at top right, #dff7f4 0%, #ffffff 45%, #ffffff 100%);
-      border:1px solid var(--line);
-      border-radius:28px;
-      padding:24px;
-      box-shadow:var(--shadow);
-      margin-bottom:18px;
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
     }
 
-    .hero-top{
-      display:flex;
-      gap:16px;
-      align-items:center;
-      justify-content:space-between;
-      flex-wrap:wrap;
+    .brand h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.1;
     }
 
-    .title-block h1{
-      margin:0;
-      font-size:clamp(28px, 4vw, 44px);
-      line-height:1.05;
-      letter-spacing:-.02em;
+    .brand p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
     }
 
-    .title-block p{
-      margin:10px 0 0;
-      color:var(--muted);
-      max-width:80ch;
-      font-size:15px;
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
     }
 
-    .hero-actions{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
+    .btn, button, select, input, textarea {
+      font: inherit;
     }
 
-    .btn{
-      border:1px solid var(--line);
-      background:#fff;
-      color:var(--text);
-      border-radius:999px;
-      padding:10px 14px;
-      cursor:pointer;
-      font-weight:600;
-      transition:.18s ease;
+    .btn {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: 0.18s ease;
     }
 
-    .btn:hover{transform:translateY(-1px)}
-    .btn.primary{
-      background:var(--brand);
-      color:#fff;
-      border-color:var(--brand);
-    }
-    .btn.primary:hover{background:var(--brand-2)}
-    .btn.ghost{
-      background:#fff;
-    }
-    .btn.warn{
-      color:var(--warn);
-      border-color:#f3d5a8;
-      background:#fffaf0;
-    }
-    .btn.danger{
-      color:var(--danger);
-      border-color:#f2c3c3;
-      background:#fff5f5;
-    }
-    .btn.active{
-      background:var(--brand);
-      color:#fff;
-      border-color:var(--brand);
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
     }
 
-    .stats{
-      display:grid;
-      grid-template-columns:repeat(4,minmax(0,1fr));
-      gap:12px;
-      margin-top:18px;
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
     }
 
-    .stat{
-      background:var(--panel);
-      border:1px solid var(--line);
-      border-radius:18px;
-      padding:14px 16px;
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      border-color: var(--primary-dark);
     }
 
-    .stat .label{
-      color:var(--muted);
-      font-size:12px;
-      font-weight:700;
-      text-transform:uppercase;
-      letter-spacing:.08em;
+    .btn-danger {
+      background: var(--danger);
+      color: #fff;
+      border-color: var(--danger);
     }
 
-    .stat .value{
-      margin-top:6px;
-      font-size:24px;
-      font-weight:800;
-      letter-spacing:-.02em;
+    .btn-success {
+      background: var(--success);
+      color: #fff;
+      border-color: var(--success);
     }
 
-    .controls{
-      background:var(--panel);
-      border:1px solid var(--line);
-      border-radius:24px;
-      padding:16px;
-      box-shadow:var(--shadow);
-      margin-bottom:18px;
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 16px;
     }
 
-    .controls-row{
-      display:grid;
-      grid-template-columns:1.4fr .9fr .9fr auto auto;
-      gap:12px;
-      align-items:center;
-      margin-bottom:12px;
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr;
+      gap: 12px;
+      align-items: end;
     }
 
-    .input, .select{
-      width:100%;
-      border:1px solid var(--line);
-      background:#fff;
-      border-radius:14px;
-      padding:12px 14px;
-      font-size:14px;
-      color:var(--text);
-      outline:none;
+    @media (max-width: 980px) {
+      .toolbar {
+        grid-template-columns: 1fr;
+      }
     }
 
-    .input:focus, .select:focus{
-      border-color:var(--brand);
-      box-shadow:0 0 0 3px rgba(15,118,110,.12);
+    .field label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
     }
 
-    .breed-bar{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
+    .field input,
+    .field select {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 12px;
+      padding: 10px 12px;
+      outline: none;
     }
 
-    .breed-btn{
-      border:1px solid var(--line);
-      background:#fff;
-      border-radius:999px;
-      padding:9px 13px;
-      font-size:13px;
-      font-weight:700;
-      color:#334155;
-      cursor:pointer;
-      transition:.18s ease;
+    .field input:focus,
+    .field select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
 
-    .breed-btn:hover{transform:translateY(-1px)}
-    .breed-btn.active{
-      background:var(--brand);
-      border-color:var(--brand);
-      color:#fff;
+    .view-tabs,
+    .breed-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
     }
 
-    .section{
-      margin-top:18px;
+    .view-tabs {
+      margin-bottom: 12px;
     }
 
-    .section-head{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-      margin-bottom:12px;
-      flex-wrap:wrap;
+    .tab-btn,
+    .breed-btn {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: 0.18s ease;
+      font-size: 14px;
     }
 
-    .section-head h2{
-      margin:0;
-      font-size:22px;
-      letter-spacing:-.02em;
+    .tab-btn.active,
+    .breed-btn.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
     }
 
-    .section-head p{
-      margin:0;
-      color:var(--muted);
-      font-size:14px;
+    .stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 12px;
     }
 
-    .grid{
-      display:grid;
-      grid-template-columns:repeat(auto-fill,minmax(290px,1fr));
-      gap:16px;
+    .stats-left {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
     }
 
-    .card{
-      background:var(--panel);
-      border:1px solid var(--line);
-      border-radius:22px;
-      overflow:hidden;
-      box-shadow:var(--shadow);
-      display:flex;
-      flex-direction:column;
-      min-height:100%;
+    .chip {
+      background: var(--chip);
+      color: #3730a3;
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 13px;
+      border: 1px solid #c7d2fe;
     }
 
-    .card-image-wrap{
-      position:relative;
-      background:#e9eef4;
+    .muted {
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+    }
+
+    .card-media {
+      position: relative;
+      background: #f3f4f6;
       aspect-ratio: 4 / 3;
-      overflow:hidden;
+      overflow: hidden;
     }
 
-    .card-image{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-      display:block;
-      background:#e9eef4;
+    .card-media img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
     }
 
-    .badge-row{
-      position:absolute;
-      top:10px;
-      left:10px;
-      right:10px;
-      display:flex;
-      justify-content:space-between;
-      align-items:flex-start;
-      gap:8px;
-      pointer-events:none;
+    .card-badges {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
     }
 
-    .badge-stack{
-      display:flex;
-      flex-wrap:wrap;
-      gap:8px;
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,0.92);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      border: 1px solid rgba(229,231,235,0.9);
+      backdrop-filter: blur(6px);
+      pointer-events: auto;
     }
 
-    .badge{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      border-radius:999px;
-      padding:6px 10px;
-      font-size:11px;
-      font-weight:800;
-      letter-spacing:.04em;
-      text-transform:uppercase;
-      backdrop-filter: blur(8px);
-      background:rgba(255,255,255,.88);
-      border:1px solid rgba(255,255,255,.75);
-      color:#0f172a;
+    .badge.favorite {
+      background: rgba(21,128,61,0.95);
+      color: #fff;
+      border-color: rgba(21,128,61,1);
     }
 
-    .badge.source-rg{background:rgba(236,253,245,.92); color:#166534}
-    .badge.source-fp{background:rgba(255,247,237,.92); color:#9a3412}
-    .badge.favorite{background:rgba(255,251,235,.95); color:#b45309}
-    .badge.hidden{background:rgba(254,242,242,.95); color:#b91c1c}
-
-    .card-body{
-      padding:16px;
-      display:flex;
-      flex-direction:column;
-      gap:12px;
-      flex:1;
+    .badge.hidden {
+      background: rgba(220,38,38,0.95);
+      color: #fff;
+      border-color: rgba(220,38,38,1);
     }
 
-    .card-top{
-      display:flex;
-      justify-content:space-between;
-      gap:12px;
-      align-items:flex-start;
+    .card-body {
+      padding: 14px 14px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1;
     }
 
-    .card-name{
-      margin:0;
-      font-size:22px;
-      line-height:1.05;
-      letter-spacing:-.02em;
+    .title-row {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
     }
 
-    .card-breed{
-      margin:6px 0 0;
-      color:var(--muted);
-      font-size:14px;
-      font-weight:600;
+    .title-row h3 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.1;
     }
 
-    .price{
-      white-space:nowrap;
-      font-weight:800;
-      color:var(--brand);
-      font-size:18px;
+    .price {
+      font-weight: 700;
+      color: var(--success);
+      white-space: nowrap;
+      font-size: 16px;
     }
 
-    .meta{
-      display:grid;
-      grid-template-columns:repeat(2,minmax(0,1fr));
-      gap:10px;
-      padding:12px;
-      background:var(--panel-2);
-      border:1px solid var(--line);
-      border-radius:16px;
+    .breed-line {
+      font-size: 15px;
+      font-weight: 600;
     }
 
-    .meta-item{
-      min-width:0;
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
     }
 
-    .meta-label{
-      display:block;
-      color:var(--muted);
-      font-size:11px;
-      text-transform:uppercase;
-      letter-spacing:.08em;
-      font-weight:800;
-      margin-bottom:4px;
+    .meta span {
+      font-size: 13px;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 9px;
+      background: #fff;
     }
 
-    .meta-value{
-      font-size:14px;
-      font-weight:700;
-      color:#253242;
-      word-break:break-word;
+    .note-box {
+      background: #fafafa;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
+      color: var(--muted);
+      min-height: 44px;
     }
 
-    .note-box{
-      width:100%;
-      min-height:74px;
-      resize:vertical;
-      border:1px solid var(--line);
-      border-radius:14px;
-      padding:12px;
-      font:inherit;
-      color:var(--text);
-      background:#fff;
-      outline:none;
+    .card-actions {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: auto;
     }
 
-    .note-box:focus{
-      border-color:var(--brand);
-      box-shadow:0 0 0 3px rgba(15,118,110,.12);
+    .card-actions .btn {
+      padding: 10px 8px;
+      text-align: center;
+      font-size: 13px;
     }
 
-    .card-actions{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-    }
-
-    .card-actions .btn{
-      flex:1;
-      min-width:110px;
-      border-radius:14px;
-      padding:11px 12px;
-    }
-
-    .link-btn{
-      text-decoration:none;
-      display:inline-flex;
-      justify-content:center;
-      align-items:center;
-    }
-
-    .empty{
-      border:1px dashed var(--line);
-      background:#fff;
-      border-radius:22px;
-      padding:32px 18px;
-      text-align:center;
-      color:var(--muted);
-    }
-
-    .loading{
-      display:grid;
-      grid-template-columns:repeat(auto-fill,minmax(290px,1fr));
-      gap:16px;
-    }
-
-    .skeleton{
-      border-radius:22px;
-      height:420px;
-      background:
-        linear-gradient(90deg, #eef2f7 25%, #f7f9fc 50%, #eef2f7 75%);
-      background-size:200% 100%;
-      animation:shimmer 1.2s linear infinite;
-      border:1px solid #e5eaf1;
-    }
-
-    @keyframes shimmer{
-      0%{background-position:200% 0}
-      100%{background-position:-200% 0}
-    }
-
-    .footer-note{
-      margin-top:18px;
-      color:var(--muted);
-      font-size:13px;
-      text-align:center;
-    }
-
-    @media (max-width: 1100px){
-      .controls-row{
-        grid-template-columns:1fr 1fr;
-      }
-      .stats{
-        grid-template-columns:repeat(2,minmax(0,1fr));
+    @media (max-width: 520px) {
+      .card-actions {
+        grid-template-columns: repeat(2, 1fr);
       }
     }
 
-    @media (max-width: 680px){
-      .wrap{padding:14px 12px 32px}
-      .hero{padding:18px}
-      .controls-row{grid-template-columns:1fr}
-      .stats{grid-template-columns:1fr}
-      .grid{grid-template-columns:1fr}
-      .card-top{flex-direction:column}
-      .price{font-size:20px}
+    .empty {
+      text-align: center;
+      padding: 50px 20px;
+      color: var(--muted);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .empty h3 {
+      color: var(--text);
+      margin: 0 0 8px;
+    }
+
+    .loading-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 16px;
+    }
+
+    .skeleton-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .skeleton-img,
+    .skeleton-line {
+      background: linear-gradient(90deg, #eef1f5 25%, #e2e8f0 50%, #eef1f5 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.3s infinite linear;
+    }
+
+    .skeleton-img {
+      aspect-ratio: 4 / 3;
+    }
+
+    .skeleton-body {
+      padding: 14px;
+    }
+
+    .skeleton-line {
+      height: 14px;
+      border-radius: 999px;
+      margin-bottom: 10px;
+    }
+
+    .w-70 { width: 70%; }
+    .w-50 { width: 50%; }
+    .w-90 { width: 90%; }
+
+    @keyframes shimmer {
+      from { background-position: 200% 0; }
+      to   { background-position: -200% 0; }
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    a.link-reset {
+      color: inherit;
+      text-decoration: none;
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <section class="hero">
-      <div class="hero-top">
-        <div class="title-block">
-          <h1>Puppy Radar</h1>
-          <p>Find low-shed puppies from your loaded sources, save your favorites, and filter instantly after the first load.</p>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand">
+        <h1>Puppy Radar</h1>
+        <p>All puppies load once. Breed buttons filter instantly. Abby's Saves stays on this browser even after redeploys.</p>
+      </div>
+      <div class="top-actions">
+        <button id="refreshBtn" class="btn btn-primary">Refresh puppies</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="view-tabs">
+        <button class="tab-btn active" data-view="all">All Puppies</button>
+        <button class="tab-btn" data-view="favorite">Abby's Saves</button>
+        <button class="tab-btn" data-view="hidden">Hidden</button>
+      </div>
+
+      <div class="toolbar">
+        <div class="field">
+          <label for="searchInput">Search by name or breed</label>
+          <input id="searchInput" type="text" placeholder="Maltese, Abby, Shih Tzu..." />
         </div>
 
-        <div class="hero-actions">
-          <button id="reloadBtn" class="btn primary" type="button">Reload puppies</button>
-          <button id="favoritesOnlyBtn" class="btn ghost" type="button">Favorites only</button>
-          <button id="restoreHiddenBtn" class="btn warn" type="button">Restore hidden</button>
+        <div class="field">
+          <label for="sortSelect">Sort</label>
+          <select id="sortSelect">
+            <option value="newest">Newest</option>
+            <option value="name">Name A-Z</option>
+            <option value="breed">Breed A-Z</option>
+            <option value="price_low">Price low-high</option>
+            <option value="price_high">Price high-low</option>
+            <option value="source">Source</option>
+          </select>
         </div>
+
+        <div class="field">
+          <label for="sourceSelect">Source</label>
+          <select id="sourceSelect">
+            <option value="All">All sources</option>
+            <option value="954 Puppies">954 Puppies</option>
+            <option value="RescueGroups">RescueGroups</option>
+            <option value="Miami-Dade Animal Services">Miami-Dade Animal Services</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <div id="breedRow" class="breed-row"></div>
       </div>
 
       <div class="stats">
-        <div class="stat">
-          <div class="label">Loaded once</div>
-          <div id="loadedCount" class="value">0</div>
+        <div class="stats-left">
+          <span id="resultCount" class="chip">0 results</span>
+          <span id="viewLabel" class="chip">View: All Puppies</span>
+          <span id="cacheStatus" class="muted"></span>
         </div>
-        <div class="stat">
-          <div class="label">Visible now</div>
-          <div id="visibleCount" class="value">0</div>
-        </div>
-        <div class="stat">
-          <div class="label">Abby's Saves</div>
-          <div id="favoriteCount" class="value">0</div>
-        </div>
-        <div class="stat">
-          <div class="label">Hidden</div>
-          <div id="hiddenCount" class="value">0</div>
-        </div>
+        <div class="muted" id="statusMessage"></div>
       </div>
-    </section>
+    </div>
 
-    <section class="controls">
-      <div class="controls-row">
-        <input id="searchInput" class="input" type="text" placeholder="Search by name, breed, city, source..." />
-        <select id="sourceSelect" class="select">
-          <option value="all">All sources</option>
-          <option value="RescueGroups">RescueGroups</option>
-          <option value="954 Puppies">954 Puppies</option>
-          <option value="Miami-Dade Animal Services">Miami-Dade Animal Services</option>
-        </select>
-        <select id="sortSelect" class="select">
-          <option value="newest">Sort: newest</option>
-          <option value="name">Sort: name</option>
-          <option value="price_low">Sort: price low to high</option>
-          <option value="price_high">Sort: price high to low</option>
-          <option value="source">Sort: source</option>
-        </select>
-        <button id="clearFiltersBtn" class="btn ghost" type="button">Clear filters</button>
-        <button id="showAllBtn" class="btn ghost" type="button">Show all</button>
-      </div>
-
-      <div id="breedBar" class="breed-bar"></div>
-    </section>
-
-    <section class="section">
-      <div class="section-head">
-        <div>
-          <h2>Abby's Saves</h2>
-          <p>Your favorites stay saved in this browser even after server redeploys.</p>
-        </div>
-      </div>
-      <div id="favoritesGrid" class="grid"></div>
-    </section>
-
-    <section class="section">
-      <div class="section-head">
-        <div>
-          <h2>Available puppies</h2>
-          <p id="resultsSummary">Loading...</p>
-        </div>
-      </div>
-
-      <div id="loadingWrap" class="loading">
-        <div class="skeleton"></div>
-        <div class="skeleton"></div>
-        <div class="skeleton"></div>
-        <div class="skeleton"></div>
-      </div>
-
-      <div id="resultsGrid" class="grid" style="display:none;"></div>
-    </section>
+    <div id="content"></div>
 
     <div class="footer-note">
-      Breed buttons filter the puppies already loaded in memory, so clicks are instant.
+      Favorites, hidden picks, and notes are saved on this browser and also try to sync to the server when possible.
     </div>
   </div>
 
   <script>
-    const LS_KEY = "puppy_radar_state_v2";
+    const LS_KEY = 'puppy_radar_state_v2';
+    const UI_KEY = 'puppy_radar_ui_v2';
 
     let ALL_PUPPIES = [];
-    let ALL_BREEDS = ["All"];
-    let currentBreed = "All";
-    let favoritesOnly = false;
+    let FILTERED_PUPPIES = [];
+    let CURRENT_VIEW = 'all';
+    let CURRENT_BREED = 'All';
+    let BREEDS = ['All'];
 
-    function safeJsonParse(value, fallback) {
-      try { return JSON.parse(value); }
-      catch { return fallback; }
-    }
+    const contentEl       = document.getElementById('content');
+    const breedRowEl      = document.getElementById('breedRow');
+    const resultCountEl   = document.getElementById('resultCount');
+    const viewLabelEl     = document.getElementById('viewLabel');
+    const cacheStatusEl   = document.getElementById('cacheStatus');
+    const statusMessageEl = document.getElementById('statusMessage');
+
+    const searchInput = document.getElementById('searchInput');
+    const sortSelect  = document.getElementById('sortSelect');
+    const sourceSelect = document.getElementById('sourceSelect');
+    const refreshBtn  = document.getElementById('refreshBtn');
 
     function loadLocalState() {
-      return safeJsonParse(localStorage.getItem(LS_KEY), {});
+      try {
+        return JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+      } catch {
+        return {};
+      }
     }
 
     function saveLocalState(state) {
       localStorage.setItem(LS_KEY, JSON.stringify(state));
     }
 
+    function loadUIState() {
+      try {
+        return JSON.parse(localStorage.getItem(UI_KEY) || '{}');
+      } catch {
+        return {};
+      }
+    }
+
+    function saveUIState() {
+      localStorage.setItem(UI_KEY, JSON.stringify({
+        currentView: CURRENT_VIEW,
+        currentBreed: CURRENT_BREED,
+        search: searchInput.value || '',
+        sort: sortSelect.value || 'newest',
+        source: sourceSelect.value || 'All'
+      }));
+    }
+
     function getItemState(id) {
-      const state = loadLocalState();
-      return state[id] || {
-        favorite: false,
-        hidden: false,
-        note: "",
-        updated_at: ""
-      };
+      return loadLocalState()[id] || { status: 'new', note: '', updated_at: null };
     }
 
-    function setItemState(id, patch) {
-      const state = loadLocalState();
-      const current = state[id] || {
-        favorite: false,
-        hidden: false,
-        note: "",
-        updated_at: ""
-      };
-
-      const next = {
-        ...current,
-        ...patch,
-        updated_at: new Date().toISOString()
-      };
-
-      state[id] = next;
-      saveLocalState(state);
-      return next;
-    }
-
-    function removeItemState(id) {
-      const state = loadLocalState();
-      delete state[id];
-      saveLocalState(state);
-    }
-
-    function toggleFavorite(id) {
-      const current = getItemState(id);
-      setItemState(id, { favorite: !current.favorite });
-      applyFilters();
-    }
-
-    function hidePuppy(id) {
-      const current = getItemState(id);
-      setItemState(id, { hidden: true, favorite: current.favorite, note: current.note || "" });
-      applyFilters();
-    }
-
-    function restoreAllHidden() {
-      const state = loadLocalState();
-      for (const id of Object.keys(state)) {
-        if (state[id]?.hidden) state[id].hidden = false;
+    async function syncStateToServer(id, status, note = '') {
+      try {
+        await fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            listing_id: id,
+            status,
+            note
+          })
+        });
+      } catch (e) {
+        // silent — local copy is still kept
       }
-      saveLocalState(state);
-      applyFilters();
     }
 
-    function saveNote(id, value) {
-      const current = getItemState(id);
-      if (!value.trim() && !current.favorite && !current.hidden) {
-        removeItemState(id);
+    function compareDates(a, b) {
+      const da = a ? new Date(a).getTime() : 0;
+      const db = b ? new Date(b).getTime() : 0;
+      return da - db;
+    }
+
+    function mergeStates(serverState, localState) {
+      const merged = { ...serverState };
+
+      for (const [id, localValue] of Object.entries(localState)) {
+        if (!merged[id]) {
+          merged[id] = localValue;
+          continue;
+        }
+        const serverValue = merged[id];
+        if (compareDates(localValue.updated_at, serverValue.updated_at) >= 0) {
+          merged[id] = localValue;
+        }
+      }
+
+      return merged;
+    }
+
+    function saveToState(id, status, note = '') {
+      const state = loadLocalState();
+
+      if (status === 'none') {
+        delete state[id];
       } else {
-        setItemState(id, { note: value });
+        state[id] = {
+          status,
+          note,
+          updated_at: new Date().toISOString()
+        };
       }
-      applyTopStats();
+
+      saveLocalState(state);
+
+      const outgoingStatus = status === 'none' ? 'none' : status;
+      syncStateToServer(id, outgoingStatus, note);
+
+      applyFilters();
     }
 
-    function formatMoney(value) {
-      if (!value) return "";
-      const match = String(value).match(/\$?([\d,]+)/);
-      return match ? `$${match[1]}` : String(value);
+    function priceToNumber(price) {
+      if (!price) return null;
+      const n = Number(String(price).replace(/[^0-9.]/g, ''));
+      return Number.isFinite(n) ? n : null;
     }
 
-    function numericPrice(value) {
-      if (!value) return null;
-      const cleaned = String(value).replace(/[^\d]/g, "");
-      return cleaned ? parseInt(cleaned, 10) : null;
+    function restoreUIState() {
+      const ui = loadUIState();
+      if (ui.currentView) CURRENT_VIEW = ui.currentView;
+      if (ui.currentBreed) CURRENT_BREED = ui.currentBreed;
+      if (ui.search) searchInput.value = ui.search;
+      if (ui.sort) sortSelect.value = ui.sort;
+      if (ui.source) sourceSelect.value = ui.source;
     }
 
-    function sourceClass(source) {
-      if (source === "RescueGroups") return "source-rg";
-      if (source === "954 Puppies") return "source-fp";
-      return "";
-    }
-
-    function cardImage(url, alt) {
-      const safeUrl = url && typeof url === "string" ? url : "";
-      if (!safeUrl) {
-        return `
-          <div class="card-image-wrap">
-            <div class="badge-row">
-              <div class="badge-stack"></div>
+    function showLoading() {
+      contentEl.innerHTML = `
+        <div class="loading-grid">
+          ${Array.from({ length: 8 }).map(() => `
+            <div class="skeleton-card">
+              <div class="skeleton-img"></div>
+              <div class="skeleton-body">
+                <div class="skeleton-line w-70"></div>
+                <div class="skeleton-line w-50"></div>
+                <div class="skeleton-line w-90"></div>
+              </div>
             </div>
-            <img class="card-image" alt="${alt}" src="https://placehold.co/800x600/e9eef4/64748b?text=No+Photo">
-          </div>
-        `;
-      }
-      return `
-        <div class="card-image-wrap">
-          <img class="card-image" alt="${alt}" src="${safeUrl}" onerror="this.src='https://placehold.co/800x600/e9eef4/64748b?text=No+Photo'">
+          `).join('')}
         </div>
       `;
     }
 
-    function renderCard(p) {
-      const local = getItemState(p.id);
-      const favorite = !!local.favorite;
-      const note = local.note || "";
-      const hidden = !!local.hidden;
-      const price = formatMoney(p.price);
-      const breedSecondary = p.breed_secondary ? ` / ${p.breed_secondary}` : "";
-      const location = [p.city, p.state].filter(Boolean).join(", ") || "Location not listed";
-      const age = p.age_text || p.age_group || "Unknown age";
-      const sex = p.sex || "Unknown";
-      const imgAlt = `${p.name || "Puppy"} - ${p.breed || "Dog"}`;
+    function showEmpty(title, text) {
+      contentEl.innerHTML = `
+        <div class="empty">
+          <h3>${title}</h3>
+          <p>${text}</p>
+        </div>
+      `;
+    }
+
+    function renderBreedButtons() {
+      breedRowEl.innerHTML = BREEDS.map(breed => `
+        <button class="breed-btn ${breed === CURRENT_BREED ? 'active' : ''}" data-breed="${escapeHtml(breed)}">
+          ${escapeHtml(breed)}
+        </button>
+      `).join('');
+
+      breedRowEl.querySelectorAll('.breed-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          CURRENT_BREED = btn.dataset.breed;
+          saveUIState();
+          renderBreedButtons();
+          applyFilters();
+        });
+      });
+    }
+
+    function renderViewTabs() {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === CURRENT_VIEW);
+      });
+
+      if (CURRENT_VIEW === 'all') viewLabelEl.textContent = 'View: All Puppies';
+      if (CURRENT_VIEW === 'favorite') viewLabelEl.textContent = "View: Abby's Saves";
+      if (CURRENT_VIEW === 'hidden') viewLabelEl.textContent = 'View: Hidden';
+    }
+
+    function applyFilters() {
+      const state = loadLocalState();
+      const q = (searchInput.value || '').trim().toLowerCase();
+      const source = sourceSelect.value || 'All';
+      const sort = sortSelect.value || 'newest';
+
+      let list = ALL_PUPPIES.map(item => {
+        const s = state[item.id] || {};
+        return {
+          ...item,
+          status: s.status || 'new',
+          note: s.note || '',
+          updated_at: s.updated_at || null
+        };
+      });
+
+      if (CURRENT_VIEW === 'all') {
+        list = list.filter(item => item.status !== 'hidden');
+      } else if (CURRENT_VIEW === 'favorite') {
+        list = list.filter(item => item.status === 'favorite');
+      } else if (CURRENT_VIEW === 'hidden') {
+        list = list.filter(item => item.status === 'hidden');
+      }
+
+      if (CURRENT_BREED !== 'All') {
+        const b = CURRENT_BREED.toLowerCase();
+        list = list.filter(item =>
+          (item.breed || '').toLowerCase().includes(b) ||
+          (item.breed_secondary || '').toLowerCase().includes(b) ||
+          (item.name || '').toLowerCase().includes(b)
+        );
+      }
+
+      if (source !== 'All') {
+        list = list.filter(item => (item.source || '') === source);
+      }
+
+      if (q) {
+        list = list.filter(item =>
+          (item.name || '').toLowerCase().includes(q) ||
+          (item.breed || '').toLowerCase().includes(q) ||
+          (item.breed_secondary || '').toLowerCase().includes(q) ||
+          (item.city || '').toLowerCase().includes(q) ||
+          (item.source || '').toLowerCase().includes(q)
+        );
+      }
+
+      if (sort === 'name') {
+        list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      } else if (sort === 'breed') {
+        list.sort((a, b) => (a.breed || '').localeCompare(b.breed || ''));
+      } else if (sort === 'source') {
+        list.sort((a, b) => (a.source || '').localeCompare(b.source || ''));
+      } else if (sort === 'price_low') {
+        list.sort((a, b) => {
+          const pa = priceToNumber(a.price);
+          const pb = priceToNumber(b.price);
+          return (pa ?? Number.MAX_SAFE_INTEGER) - (pb ?? Number.MAX_SAFE_INTEGER);
+        });
+      } else if (sort === 'price_high') {
+        list.sort((a, b) => {
+          const pa = priceToNumber(a.price);
+          const pb = priceToNumber(b.price);
+          return (pb ?? -1) - (pa ?? -1);
+        });
+      } else {
+        list.sort((a, b) => (b.posted_at || '').localeCompare(a.posted_at || ''));
+      }
+
+      FILTERED_PUPPIES = list;
+      renderCards(list);
+      resultCountEl.textContent = `${list.length} result${list.length === 1 ? '' : 's'}`;
+      renderViewTabs();
+      saveUIState();
+    }
+
+    function renderCards(list) {
+      if (!list.length) {
+        if (CURRENT_VIEW === 'favorite') {
+          showEmpty("No saved puppies yet", "Click Save on any puppy card and it will appear here.");
+          return;
+        }
+        if (CURRENT_VIEW === 'hidden') {
+          showEmpty("No hidden puppies", "Hidden puppies will appear here until you unhide them.");
+          return;
+        }
+        showEmpty("No puppies found", "Try another breed, source, or search text.");
+        return;
+      }
+
+      contentEl.innerHTML = `<div class="grid">${list.map(renderCard).join('')}</div>`;
+
+      contentEl.querySelectorAll('[data-action="favorite"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id;
+          const current = getItemState(id).status;
+          saveToState(id, current === 'favorite' ? 'none' : 'favorite', getItemState(id).note || '');
+        });
+      });
+
+      contentEl.querySelectorAll('[data-action="hide"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id;
+          const current = getItemState(id).status;
+          if (current === 'hidden') {
+            saveToState(id, 'none', getItemState(id).note || '');
+          } else {
+            saveToState(id, 'hidden', getItemState(id).note || '');
+          }
+        });
+      });
+
+      contentEl.querySelectorAll('[data-action="note"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id;
+          const existing = getItemState(id).note || '';
+          const note = prompt('Add or edit note:', existing);
+          if (note === null) return;
+          const currentStatus = getItemState(id).status;
+          const nextStatus = currentStatus === 'new' ? 'favorite' : currentStatus;
+          saveToState(id, nextStatus, note.trim());
+        });
+      });
+
+      contentEl.querySelectorAll('[data-action="unhide"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id;
+          const note = getItemState(id).note || '';
+          saveToState(id, 'none', note);
+        });
+      });
+    }
+
+    function renderCard(item) {
+      const isFavorite = item.status === 'favorite';
+      const isHidden = item.status === 'hidden';
+      const img = item.photo_url ? escapeHtml(item.photo_url) : '';
+      const openUrl = item.url ? escapeHtml(item.url) : '#';
+      const price = item.price ? `<div class="price">${escapeHtml(item.price)}</div>` : '';
+      const noteText = item.note ? escapeHtml(item.note) : '<span class="muted">No note yet.</span>';
 
       return `
-        <article class="card" data-id="${p.id}">
-          <div class="card-image-wrap">
-            <img class="card-image" alt="${imgAlt}" src="${(p.photo_url && typeof p.photo_url === 'string') ? p.photo_url : 'https://placehold.co/800x600/e9eef4/64748b?text=No+Photo'}"
-                 onerror="this.src='https://placehold.co/800x600/e9eef4/64748b?text=No+Photo'">
-            <div class="badge-row">
-              <div class="badge-stack">
-                <span class="badge ${sourceClass(p.source)}">${p.source || "Source"}</span>
-                ${favorite ? `<span class="badge favorite">Saved</span>` : ""}
-                ${hidden ? `<span class="badge hidden">Hidden</span>` : ""}
+        <div class="card">
+          <div class="card-media">
+            ${img
+              ? `<img src="${img}" alt="${escapeHtml(item.name || 'Puppy')}" loading="lazy" onerror="this.style.display='none'; this.parentNode.style.background='#e5e7eb';">`
+              : ``
+            }
+            <div class="card-badges">
+              <div class="badge">${escapeHtml(item.source || 'Unknown')}</div>
+              <div>
+                ${isFavorite ? `<span class="badge favorite">Saved</span>` : ''}
+                ${isHidden ? `<span class="badge hidden">Hidden</span>` : ''}
               </div>
             </div>
           </div>
 
           <div class="card-body">
-            <div class="card-top">
+            <div class="title-row">
               <div>
-                <h3 class="card-name">${p.name || "Unknown"}</h3>
-                <p class="card-breed">${p.breed || "Breed unknown"}${breedSecondary}</p>
+                <h3>${escapeHtml(item.name || 'Unnamed')}</h3>
               </div>
-              ${price ? `<div class="price">${price}</div>` : ""}
+              ${price}
             </div>
+
+            <div class="breed-line">${escapeHtml(item.breed || 'Unknown breed')}${item.breed_secondary ? ` / ${escapeHtml(item.breed_secondary)}` : ''}</div>
 
             <div class="meta">
-              <div class="meta-item">
-                <span class="meta-label">Age</span>
-                <span class="meta-value">${age}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-label">Sex</span>
-                <span class="meta-value">${sex}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-label">Location</span>
-                <span class="meta-value">${location}</span>
-              </div>
-              <div class="meta-item">
-                <span class="meta-label">Status</span>
-                <span class="meta-value">${favorite ? "Saved" : "New"}</span>
-              </div>
+              ${item.age_text ? `<span>${escapeHtml(item.age_text)}</span>` : ''}
+              ${item.sex ? `<span>${escapeHtml(item.sex)}</span>` : ''}
+              ${item.city || item.state ? `<span>${escapeHtml([item.city, item.state].filter(Boolean).join(', '))}</span>` : ''}
             </div>
 
-            <textarea
-              class="note-box"
-              placeholder="Private note about this puppy..."
-              data-note-id="${p.id}"
-            >${note.replace(/</g, "&lt;")}</textarea>
+            <div class="note-box">${noteText}</div>
 
             <div class="card-actions">
-              <button class="btn ${favorite ? 'primary' : 'ghost'}" type="button" onclick="toggleFavorite('${p.id}')">
-                ${favorite ? "★ Saved" : "☆ Save"}
+              <button class="btn ${isFavorite ? 'btn-success' : ''}" data-action="favorite" data-id="${escapeHtml(item.id)}">
+                ${isFavorite ? 'Unsave' : 'Save'}
               </button>
 
-              <button class="btn danger" type="button" onclick="hidePuppy('${p.id}')">
-                Hide
-              </button>
+              ${isHidden
+                ? `<button class="btn" data-action="unhide" data-id="${escapeHtml(item.id)}">Unhide</button>`
+                : `<button class="btn ${isHidden ? 'btn-danger' : ''}" data-action="hide" data-id="${escapeHtml(item.id)}">Hide</button>`
+              }
 
-              ${p.url ? `
-                <a class="btn primary link-btn" href="${p.url}" target="_blank" rel="noopener noreferrer">
-                  Open listing
-                </a>
-              ` : `
-                <button class="btn" type="button" disabled>No listing link</button>
-              `}
+              <button class="btn" data-action="note" data-id="${escapeHtml(item.id)}">Note</button>
+
+              <a class="btn link-reset" href="${openUrl}" target="_blank" rel="noopener noreferrer">Open</a>
             </div>
           </div>
-        </article>
+        </div>
       `;
     }
 
-    function renderEmpty(target, message) {
-      target.innerHTML = `<div class="empty">${message}</div>`;
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     }
 
-    function buildBreedBar() {
-      const breedBar = document.getElementById("breedBar");
-      breedBar.innerHTML = "";
-
-      ALL_BREEDS.forEach(breed => {
-        const btn = document.createElement("button");
-        btn.className = "breed-btn" + (breed === currentBreed ? " active" : "");
-        btn.type = "button";
-        btn.textContent = breed;
-        btn.dataset.breed = breed;
-        btn.addEventListener("click", () => {
-          currentBreed = breed;
-          document.querySelectorAll(".breed-btn").forEach(b => b.classList.remove("active"));
-          btn.classList.add("active");
-          applyFilters();
-        });
-        breedBar.appendChild(btn);
-      });
-    }
-
-    function applyTopStats() {
-      const state = loadLocalState();
-      const hiddenCount = Object.values(state).filter(v => v?.hidden).length;
-      const favoriteCount = Object.values(state).filter(v => v?.favorite).length;
-
-      document.getElementById("loadedCount").textContent = ALL_PUPPIES.length;
-      document.getElementById("favoriteCount").textContent = favoriteCount;
-      document.getElementById("hiddenCount").textContent = hiddenCount;
-      document.getElementById("restoreHiddenBtn").textContent = hiddenCount > 0 ? `Restore hidden (${hiddenCount})` : "Restore hidden";
-      document.getElementById("favoritesOnlyBtn").classList.toggle("active", favoritesOnly);
-      document.getElementById("favoritesOnlyBtn").textContent = favoritesOnly ? "Showing favorites only" : "Favorites only";
-    }
-
-    function getFilteredPuppies() {
-      const searchText = document.getElementById("searchInput").value.trim().toLowerCase();
-      const sourceValue = document.getElementById("sourceSelect").value;
-      const sortValue = document.getElementById("sortSelect").value;
-      const state = loadLocalState();
-
-      let list = ALL_PUPPIES
-        .map(p => {
-          const local = state[p.id] || {};
-          return {
-            ...p,
-            _favorite: !!local.favorite,
-            _hidden: !!local.hidden,
-            _note: local.note || ""
-          };
-        })
-        .filter(p => !p._hidden)
-        .filter(p => {
-          if (currentBreed === "All") return true;
-          const b = currentBreed.toLowerCase();
-          return (
-            (p.breed || "").toLowerCase().includes(b) ||
-            (p.breed_secondary || "").toLowerCase().includes(b) ||
-            (p.name || "").toLowerCase().includes(b)
-          );
-        })
-        .filter(p => {
-          if (sourceValue === "all") return true;
-          return (p.source || "") === sourceValue;
-        })
-        .filter(p => {
-          if (!favoritesOnly) return true;
-          return p._favorite;
-        })
-        .filter(p => {
-          if (!searchText) return true;
-          const hay = [
-            p.name, p.breed, p.breed_secondary, p.city, p.state, p.source, p.age_text, p.sex, p._note
-          ].join(" ").toLowerCase();
-          return hay.includes(searchText);
-        });
-
-      if (sortValue === "name") {
-        list.sort((a,b) => (a.name || "").localeCompare(b.name || ""));
-      } else if (sortValue === "source") {
-        list.sort((a,b) => (a.source || "").localeCompare(b.source || ""));
-      } else if (sortValue === "price_low") {
-        list.sort((a,b) => (numericPrice(a.price) ?? 99999999) - (numericPrice(b.price) ?? 99999999));
-      } else if (sortValue === "price_high") {
-        list.sort((a,b) => (numericPrice(b.price) ?? -1) - (numericPrice(a.price) ?? -1));
-      } else {
-        list.sort((a,b) => (b.posted_at || "").localeCompare(a.posted_at || ""));
-      }
-
-      return list;
-    }
-
-    function renderFavoritesSection() {
-      const favoritesGrid = document.getElementById("favoritesGrid");
-      const state = loadLocalState();
-
-      const favorites = ALL_PUPPIES
-        .map(p => ({
-          ...p,
-          _local: state[p.id] || {}
-        }))
-        .filter(p => p._local.favorite && !p._local.hidden)
-        .sort((a,b) => (b._local.updated_at || "").localeCompare(a._local.updated_at || ""));
-
-      if (!favorites.length) {
-        renderEmpty(favoritesGrid, "No saved puppies yet. Click Save on any card and it will stay here.");
-        return;
-      }
-
-      favoritesGrid.innerHTML = favorites.map(renderCard).join("");
-      bindNoteEvents(favoritesGrid);
-    }
-
-    function bindNoteEvents(scope) {
-      scope.querySelectorAll("[data-note-id]").forEach(el => {
-        el.addEventListener("blur", e => {
-          saveNote(e.target.dataset.noteId, e.target.value);
-        });
-      });
-    }
-
-    function applyFilters() {
-      const list = getFilteredPuppies();
-      const resultsGrid = document.getElementById("resultsGrid");
-      const resultsSummary = document.getElementById("resultsSummary");
-      const visibleCount = document.getElementById("visibleCount");
-
-      visibleCount.textContent = list.length;
-      resultsSummary.textContent = `${list.length} puppies visible from ${ALL_PUPPIES.length} loaded`;
-
-      if (!list.length) {
-        renderEmpty(resultsGrid, "No puppies match your current filters.");
-      } else {
-        resultsGrid.innerHTML = list.map(renderCard).join("");
-        bindNoteEvents(resultsGrid);
-      }
-
-      renderFavoritesSection();
-      applyTopStats();
-    }
-
-    async function loadBreeds() {
+    async function fetchJSON(url, fallback = null) {
       try {
-        const res = await fetch("/api/breeds");
-        const data = await res.json();
-        ALL_BREEDS = data.breeds || ["All"];
-      } catch {
-        ALL_BREEDS = ["All"];
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+        return await res.json();
+      } catch (e) {
+        return fallback;
       }
-      buildBreedBar();
     }
 
-    async function loadAllPuppies() {
-      const loadingWrap = document.getElementById("loadingWrap");
-      const resultsGrid = document.getElementById("resultsGrid");
-      const resultsSummary = document.getElementById("resultsSummary");
+    async function initialLoad() {
+      showLoading();
+      statusMessageEl.textContent = 'Loading puppies...';
 
-      loadingWrap.style.display = "grid";
-      resultsGrid.style.display = "none";
-      resultsSummary.textContent = "Loading puppies...";
+      restoreUIState();
+
+      const [breedData, searchData, serverState, debugData] = await Promise.all([
+        fetchJSON('/api/breeds', { breeds: BREEDS }),
+        fetchJSON('/api/search?breed=All', { results: [] }),
+        fetchJSON('/api/state', {}),
+        fetchJSON('/api/debug', null)
+      ]);
+
+      BREEDS = breedData?.breeds?.length ? breedData.breeds : ['All'];
+      ALL_PUPPIES = searchData?.results || [];
+
+      const localState = loadLocalState();
+      const mergedState = mergeStates(serverState || {}, localState || {});
+      saveLocalState(mergedState);
+
+      renderBreedButtons();
+
+      if (debugData?.fp_cache_file?.exists) {
+        cacheStatusEl.textContent =
+          `954 cache: ${debugData.fp_cache_file.url_count || 0} URLs, ${debugData.fp_cache_file.age_hours || 0}h old`;
+      } else {
+        cacheStatusEl.textContent = '';
+      }
+
+      statusMessageEl.textContent = `Loaded ${ALL_PUPPIES.length} puppies`;
+      applyFilters();
+    }
+
+    async function refreshAll() {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing...';
+      statusMessageEl.textContent = 'Refreshing puppies...';
 
       try {
-        const res = await fetch("/api/search?breed=All");
-        const data = await res.json();
-        ALL_PUPPIES = data.results || [];
-      } catch (err) {
-        ALL_PUPPIES = [];
-        console.error(err);
+        const searchData = await fetchJSON('/api/search?breed=All', { results: [] });
+        ALL_PUPPIES = searchData?.results || [];
+
+        const debugData = await fetchJSON('/api/debug', null);
+        if (debugData?.fp_cache_file?.exists) {
+          cacheStatusEl.textContent =
+            `954 cache: ${debugData.fp_cache_file.url_count || 0} URLs, ${debugData.fp_cache_file.age_hours || 0}h old`;
+        }
+
+        statusMessageEl.textContent = `Loaded ${ALL_PUPPIES.length} puppies`;
+        applyFilters();
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh puppies';
       }
-
-      loadingWrap.style.display = "none";
-      resultsGrid.style.display = "grid";
-      applyFilters();
     }
 
-    function clearFilters() {
-      currentBreed = "All";
-      favoritesOnly = false;
-      document.getElementById("searchInput").value = "";
-      document.getElementById("sourceSelect").value = "all";
-      document.getElementById("sortSelect").value = "newest";
-      document.querySelectorAll(".breed-btn").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.breed === "All");
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        CURRENT_VIEW = btn.dataset.view;
+        renderViewTabs();
+        applyFilters();
       });
-      applyFilters();
-    }
-
-    function showAllAgain() {
-      favoritesOnly = false;
-      currentBreed = "All";
-      document.getElementById("searchInput").value = "";
-      document.getElementById("sourceSelect").value = "all";
-      document.querySelectorAll(".breed-btn").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.breed === "All");
-      });
-      applyFilters();
-    }
-
-    document.getElementById("searchInput").addEventListener("input", applyFilters);
-    document.getElementById("sourceSelect").addEventListener("change", applyFilters);
-    document.getElementById("sortSelect").addEventListener("change", applyFilters);
-
-    document.getElementById("favoritesOnlyBtn").addEventListener("click", () => {
-      favoritesOnly = !favoritesOnly;
-      applyFilters();
     });
 
-    document.getElementById("restoreHiddenBtn").addEventListener("click", restoreAllHidden);
-    document.getElementById("reloadBtn").addEventListener("click", loadAllPuppies);
-    document.getElementById("clearFiltersBtn").addEventListener("click", clearFilters);
-    document.getElementById("showAllBtn").addEventListener("click", showAllAgain);
+    searchInput.addEventListener('input', applyFilters);
+    sortSelect.addEventListener('change', applyFilters);
+    sourceSelect.addEventListener('change', applyFilters);
+    refreshBtn.addEventListener('click', refreshAll);
 
-    window.toggleFavorite = toggleFavorite;
-    window.hidePuppy = hidePuppy;
-
-    (async function init() {
-      await loadBreeds();
-      await loadAllPuppies();
-    })();
+    initialLoad();
   </script>
 </body>
 </html>
