@@ -118,9 +118,9 @@ def matches_breed(name: str, primary: str, secondary: str, filt: str) -> bool:
         return True
     b = filt.lower()
     return (
-        b in (primary   or "").lower() or
+        b in (primary or "").lower() or
         b in (secondary or "").lower() or
-        b in (name      or "").lower()
+        b in (name or "").lower()
     )
 
 
@@ -154,8 +154,8 @@ def _age_from_birthdate(text: str) -> str:
         m = re.search(pat, text)
         if m:
             try:
-                birth  = builder(m)
-                today  = date.today()
+                birth = builder(m)
+                today = date.today()
                 months = max(0, (today.year - birth.year) * 12 + (today.month - birth.month))
                 if months == 0:
                     weeks = max(0, (today - birth).days // 7)
@@ -182,16 +182,16 @@ def _is_valid_fp_url(url: str) -> bool:
         return False
     if segs[1] not in FP_BREED_SLUGS_SET:
         return False
-    return bool(re.match(r'^[a-z0-9-]{4,}$', segs[2]))
+    return bool(re.match(r"^[a-z0-9-]{4,}$", segs[2]))
 
 
 def _extract_fp_urls_from_text(text: str) -> set[str]:
-    found   = set()
+    found = set()
     pattern = r'(?:https?://954puppies\.com)?(/puppies/([a-z0-9-]+)/([a-z0-9-]{4,}))'
     for m in re.finditer(pattern, text, re.I):
         slug = m.group(2).lower()
         pid  = m.group(3).lower()
-        if slug in FP_BREED_SLUGS_SET and re.match(r'^[a-z0-9-]{4,}$', pid):
+        if slug in FP_BREED_SLUGS_SET and re.match(r"^[a-z0-9-]{4,}$", pid):
             found.add(f"{FP_BASE}{m.group(1)}")
     return found
 
@@ -208,7 +208,7 @@ def _rg_photo_map(animals: list, included: list) -> dict:
 
     m: dict[str, str] = {}
     for a in animals:
-        aid  = str(a.get("id", ""))
+        aid = str(a.get("id", ""))
         pics = a.get("relationships", {}).get("pictures", {}).get("data", [])
         for p in (pics if isinstance(pics, list) else []):
             pid = str(p.get("id", ""))
@@ -224,15 +224,18 @@ def _rg_photo_map(animals: list, included: list) -> dict:
 
 def _rg_passes(a: dict, bf: str) -> bool:
     attrs  = a.get("attributes", {})
-    age_g  = (attrs.get("ageGroup")  or "").lower()
+    age_g  = (attrs.get("ageGroup") or "").lower()
     size_g = (attrs.get("sizeGroup") or "").lower()
 
-    if age_g  not in RG_ALLOWED_AGE_GROUPS:  return False
-    if size_g not in RG_ALLOWED_SIZE_GROUPS: return False
+    if age_g not in RG_ALLOWED_AGE_GROUPS:
+        return False
+    if size_g not in RG_ALLOWED_SIZE_GROUPS:
+        return False
 
     age_s = (attrs.get("ageString") or "").lower()
     if _rg_has_years(age_s):
         return False
+
     mo = re.search(r"(\d+)\s*m(?:onth|o)s?", age_s, re.I)
     if mo and int(mo.group(1)) >= 6:
         return False
@@ -241,6 +244,7 @@ def _rg_passes(a: dict, bf: str) -> bool:
         attrs.get("breedPrimary") or "",
         attrs.get("breedSecondary") or "",
     ])).lower()
+
     if not _is_low_shed(breed):
         return False
 
@@ -257,14 +261,16 @@ async def _rg_page(client: httpx.AsyncClient, page: int) -> dict:
         f"{RG_BASE}/public/animals/search/available/dogs/",
         headers=rg_headers(),
         params={
-            "limit": 25, "page": page, "include": "pictures",
+            "limit": 25,
+            "page": page,
+            "include": "pictures",
             "fields[animals]": (
                 "name,breedPrimary,breedSecondary,ageGroup,ageString,"
                 "sizeGroup,sex,locationCity,locationState,locationDistance,"
                 "updatedDate,urlSingleAdbk,pictureThumbnailUrl"
             ),
             "filters[postalcode]": ZIP_CODE,
-            "filters[distance]":   RADIUS_MILES,
+            "filters[distance]": RADIUS_MILES,
         },
     )
     r.raise_for_status()
@@ -274,6 +280,7 @@ async def _rg_page(client: httpx.AsyncClient, page: int) -> dict:
 async def fetch_rescuegroups(bf: str) -> list:
     if not RG_KEY:
         return []
+
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             pages = await asyncio.gather(
@@ -290,13 +297,16 @@ async def fetch_rescuegroups(bf: str) -> list:
         all_a.extend(pg.get("data", []))
         all_i.extend(pg.get("included", []))
 
-    pm  = _rg_photo_map(all_a, all_i)
+    pm = _rg_photo_map(all_a, all_i)
     out = []
+
     for a in all_a:
         if not _rg_passes(a, bf):
             continue
-        at  = a.get("attributes", {})
+
+        at = a.get("attributes", {})
         lid = str(a.get("id", ""))
+
         out.append({
             "id":              f"rg_{lid}",
             "name":            at.get("name", "Unknown"),
@@ -314,20 +324,22 @@ async def fetch_rescuegroups(bf: str) -> list:
             "url":             at.get("urlSingleAdbk", ""),
             "low_shed":        True,
         })
+
     return out
 
 
-# ── 954 Puppies — reads cache file written by GitHub Actions ──────────────
+# ── 954 Puppies — reads GitHub Actions cache file ────────────────────────
 
 async def _fp_refresh_cache() -> list[str]:
     global _fp_url_cache
 
-    # Priority 1: GitHub Actions cache file (fresh every 6 hours)
+    # Priority 1: file generated by GitHub Actions every 6h
     if FP_CACHE_FILE.exists():
         try:
             data     = json.loads(FP_CACHE_FILE.read_text())
             urls     = data.get("urls", [])
             saved_at = data.get("scraped_at", 0.0)
+
             if urls and (time.time() - saved_at) < FP_CACHE_TTL:
                 _fp_url_cache = {
                     "urls":      urls,
@@ -338,23 +350,26 @@ async def _fp_refresh_cache() -> list[str]:
         except Exception:
             pass
 
-    # Priority 2: httpx fallback (954puppies is JS-rendered so usually returns 0,
-    # but harmless to try — no crash, no browser needed)
+    # Priority 2: harmless httpx fallback
     async with httpx.AsyncClient(
-        headers=SCRAPER_HEADERS, follow_redirects=True, timeout=20.0
+        headers=SCRAPER_HEADERS,
+        follow_redirects=True,
+        timeout=20.0,
     ) as client:
         all_urls: set[str] = set()
 
-        # Try sitemap paths
         for path in ["/sitemap.xml", "/sitemap-index.xml", "/sitemap_index.xml"]:
             try:
                 r = await client.get(f"{FP_BASE}{path}", timeout=12.0)
                 if r.status_code == 200:
                     found = _extract_fp_urls_from_text(r.text)
+
                     sub_maps = re.findall(
                         r'<loc>\s*(https?://[^\s<]*sitemap[^\s<]*)\s*</loc>',
-                        r.text, re.I
+                        r.text,
+                        re.I
                     )
+
                     if sub_maps:
                         responses = await asyncio.gather(
                             *[client.get(sm, timeout=12.0) for sm in sub_maps[:20]],
@@ -363,6 +378,7 @@ async def _fp_refresh_cache() -> list[str]:
                         for resp in responses:
                             if hasattr(resp, "status_code") and resp.status_code == 200:
                                 found.update(_extract_fp_urls_from_text(resp.text))
+
                     if found:
                         all_urls.update(found)
                         break
@@ -371,17 +387,23 @@ async def _fp_refresh_cache() -> list[str]:
 
         url_list = list(all_urls)
         method   = "httpx_fallback" if url_list else "none_found"
-        _fp_url_cache = {"urls": url_list, "cached_at": time.time(), "method": method}
+
+        _fp_url_cache = {
+            "urls":      url_list,
+            "cached_at": time.time(),
+            "method":    method,
+        }
+
         return url_list
 
 
 async def _fp_get_all_urls() -> list[str]:
-    # Always check the GitHub Actions file first
     if FP_CACHE_FILE.exists():
         try:
             data     = json.loads(FP_CACHE_FILE.read_text())
             urls     = data.get("urls", [])
             saved_at = data.get("scraped_at", 0.0)
+
             if urls and (time.time() - saved_at) < FP_CACHE_TTL:
                 return urls
         except Exception:
@@ -398,9 +420,7 @@ async def _on_startup():
     asyncio.create_task(_fp_refresh_cache())
 
 
-async def _fp_parse_detail(
-    client: httpx.AsyncClient, url: str, bf: str
-) -> dict | None:
+async def _fp_parse_detail(client: httpx.AsyncClient, url: str, bf: str) -> dict | None:
     try:
         r = await client.get(url, timeout=12.0)
         if r.status_code != 200:
@@ -414,39 +434,42 @@ async def _fp_parse_detail(
 
     soup = BeautifulSoup(html, "lxml")
     txt  = soup.get_text(" ", strip=True)
-
     body_lower = txt.lower()
+
     if any(w in body_lower for w in (
         "adopted", "this puppy has been", "no longer available", "sold",
     )):
         return None
 
     name = ""
-    og   = soup.find("meta", property="og:title")
+    og = soup.find("meta", property="og:title")
     if og:
         cand = re.split(r"\s*[-–|]\s*", og.get("content", ""))[0].strip()
         if 1 < len(cand) <= 30:
             name = cand
+
     if not name:
         h1 = soup.find("h1")
         if h1:
             cand = h1.get_text(strip=True)
             if 1 < len(cand) <= 30 and "puppies" not in cand.lower():
                 name = cand
+
     if not name or len(name) < 2:
         return None
 
-    segs       = urlparse(url).path.lower().strip("/").split("/")
+    segs = urlparse(url).path.lower().strip("/").split("/")
     breed_slug = segs[1] if len(segs) >= 2 else ""
     breed_name = breed_slug.replace("-", " ").title()
 
     if not matches_breed(name, breed_name, "", bf):
         return None
 
-    photo  = ""
+    photo = ""
     og_img = soup.find("meta", property="og:image")
     if og_img:
         photo = og_img.get("content", "")
+
     if not photo:
         for img in soup.find_all("img"):
             src = img.get("src") or img.get("data-src") or ""
@@ -486,12 +509,15 @@ async def fetch_954_puppies(bf: str) -> list:
         return []
 
     async with httpx.AsyncClient(
-        timeout=30.0, follow_redirects=True, headers=SCRAPER_HEADERS
+        timeout=30.0,
+        follow_redirects=True,
+        headers=SCRAPER_HEADERS
     ) as client:
         results = []
         for i in range(0, min(len(urls), 150), 10):
+            batch = urls[i:i+10]
             for r in await asyncio.gather(
-                *[_fp_parse_detail(client, u, bf) for u in urls[i:i+10]],
+                *[_fp_parse_detail(client, u, bf) for u in batch],
                 return_exceptions=True,
             ):
                 if isinstance(r, dict) and r:
@@ -499,11 +525,12 @@ async def fetch_954_puppies(bf: str) -> list:
         return results
 
 
-# ── Miami-Dade Animal Services ────────────────────────────────────────────
+# ── Miami-Dade ────────────────────────────────────────────────────────────
 
 def _parse_mdas(html: str, base: str, bf: str) -> list:
     soup = BeautifulSoup(html, "lxml")
     out, seen = [], set()
+
     cards = (
         soup.find_all("div", class_=re.compile(r"animal|pet|dog|result|card|listing", re.I)) or
         soup.find_all("article") or
@@ -511,28 +538,35 @@ def _parse_mdas(html: str, base: str, bf: str) -> list:
          if t.find("img") and t.find(["h2", "h3", "h4"])
          and len(t.get_text(strip=True)) > 15]
     )
+
     for card in cards:
         txt     = card.get_text(" ", strip=True)
         name_el = card.find(["h2", "h3", "h4"]) or card.find(class_=re.compile(r"name", re.I))
         name    = name_el.get_text(strip=True) if name_el else ""
+
         if not name or len(name) < 2 or len(name) > 40 or name in seen:
             continue
+
         seen.add(name)
+
         bel   = card.find(class_=re.compile(r"breed|species", re.I))
         breed = bel.get_text(strip=True) if bel else ""
+
         am    = re.search(r"\b(\d+\s*(?:month|year|week|mo|yr|wk)s?\s*old)\b", txt, re.I)
         age_s = am.group(1) if am else ""
+
         if _rg_has_years(age_s):
             continue
         if not _is_low_shed(f"{name} {breed}"):
             continue
         if not matches_breed(name, breed, "", bf):
             continue
+
         img = card.find("img")
-        ph  = _make_absolute(
-            (img.get("src") or img.get("data-src") or ""), base
-        ) if img else ""
+        ph = _make_absolute((img.get("src") or img.get("data-src") or ""), base) if img else ""
+
         lk = card.find("a", href=True)
+
         out.append({
             "id":              f"mdas_{re.sub(r'[^a-z0-9]', '_', name.lower())}",
             "name":            name,
@@ -550,12 +584,15 @@ def _parse_mdas(html: str, base: str, bf: str) -> list:
             "url":             _make_absolute(lk["href"], base) if lk else base,
             "low_shed":        True,
         })
+
     return out[:50]
 
 
 async def fetch_miami_dade(bf: str) -> list:
     async with httpx.AsyncClient(
-        timeout=25.0, follow_redirects=True, headers=SCRAPER_HEADERS
+        timeout=25.0,
+        follow_redirects=True,
+        headers=SCRAPER_HEADERS
     ) as client:
         for url in MDAS_URLS:
             try:
@@ -585,10 +622,11 @@ def get_breeds():
 @app.get("/api/debug")
 async def debug_api():
     cache_file_info: dict = {"exists": False}
+
     if FP_CACHE_FILE.exists():
         try:
             data = json.loads(FP_CACHE_FILE.read_text())
-            age  = round(time.time() - data.get("scraped_at", 0))
+            age = round(time.time() - data.get("scraped_at", 0))
             cache_file_info = {
                 "exists":    True,
                 "url_count": data.get("count", len(data.get("urls", []))),
@@ -612,11 +650,13 @@ async def debug_api():
             async with httpx.AsyncClient(timeout=15.0) as client:
                 data = await _rg_page(client, 1)
             animals = data.get("data", [])
-            age_c   = {}
+            age_c = {}
             for a in animals:
                 ag = a.get("attributes", {}).get("ageGroup", "Unknown")
                 age_c[ag] = age_c.get(ag, 0) + 1
+
             passing = [a for a in animals if _rg_passes(a, "All")]
+
             result["sources"]["rescuegroups"] = {
                 "status":              "ok",
                 "total_page1":         len(animals),
@@ -661,7 +701,7 @@ async def fp_refresh():
         try:
             data     = json.loads(FP_CACHE_FILE.read_text())
             age_sec  = round(time.time() - data.get("scraped_at", 0))
-            file_age = f"{round(age_sec/3600, 1)}h ago"
+            file_age = f"{round(age_sec / 3600, 1)}h ago"
         except Exception:
             pass
 
@@ -701,8 +741,9 @@ async def search_puppies(breed: str = "All", sort: str = "newest"):
     else:
         deduped.sort(key=lambda x: x.get("posted_at") or "", reverse=True)
 
-    state   = load_state()
+    state = load_state()
     results = []
+
     for item in deduped:
         lid = item["id"]
         s   = state.get(lid, {})
@@ -723,6 +764,7 @@ def get_state():
 @app.post("/api/state")
 def update_state(body: StateUpdate):
     state = load_state()
+
     if body.status == "none":
         state.pop(body.listing_id, None)
     else:
@@ -731,6 +773,7 @@ def update_state(body: StateUpdate):
             "note":       body.note,
             "updated_at": datetime.utcnow().isoformat(),
         }
+
     save_state(state)
     return {"ok": True}
 
